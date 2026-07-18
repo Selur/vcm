@@ -7,9 +7,9 @@ This plugin needs any one of libfftw3f-3.dll 32bit and 64bit of FFTW.org to resi
 (may be windows\system32 folder, or wow)
 
 Author V.C.Mohan.
-20 Dec 2020. 25 May 2021
+20 Dec 2020. 25 May 2021   21 dec 2025
 
-Copyright (C) <2020-2021>  <V.C.Mohan>
+Copyright (C) <2020-2026>  <V.C.Mohan>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -152,7 +152,7 @@ float  makeZeroMean(float* in, const finc* sp,int pitch, int* offsets, int grid,
 void  AutoCorrelate(fftwf_complex* Afreq, int fsize, bool center)
 {
 	
-	float mult = 1.0 / (fsize);
+	float mult = 1.0f / (fsize);
 
 	// complex multiply with conjugate and scale down to compensate fft upscaling
 	
@@ -201,7 +201,7 @@ float NormalizeSpectrum(fftwf_complex* buf, int fsize, bool center)
 	// normalize
 	if (maximum > 0.0001f)
 	{
-		float mult = 1.0 / (maximum);
+		float mult = 1.0f / (maximum);
 
 		if (center)
 		{
@@ -262,15 +262,20 @@ static void VS_CC f2qbokehInit(VSMap* in, VSMap* out, void** instanceData, VSNod
 	d->f2size = d->block * d->bestR;
 	int bsize = d->block * d->block;
 #include "ConstructorCodeForLateBindingfft.cpp"	
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * bsize);
 
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
+	{
 
-	// We require one forward for padded size   and two inverse transforms( one of best size and other for padded . As our dimensions are good (multiple of 2x3x5 measure is used.
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->block, d->block, d->inBuf, d->outBuf, FFTW_MEASURE);
-	// inverse so complex to real used
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->block, d->block, d->outBuf, d->inBuf, FFTW_MEASURE);
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * bsize);
+
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
+
+		// We require one forward for padded size   and two inverse transforms( one of best size and other for padded . As our dimensions are good (multiple of 2x3x5 measure is used.
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->block, d->block, d->inBuf, d->outBuf, FFTW_MEASURE);
+		// inverse so complex to real used
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->block, d->block, d->outBuf, d->inBuf, FFTW_MEASURE);
+	}
 
 	//d->fftwf_free(inBuf);
 	//d->fftwf_free(outBuf);
@@ -503,11 +508,13 @@ static void VS_CC f2qbokehFree(void* instanceData, VSCore* core, const VSAPI* vs
 {
 	F2QBokehData* d = (F2QBokehData*)instanceData;
 
-	
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pinv);	
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pinv);
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+	}
 
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
@@ -568,7 +575,7 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
 
-	d.grid = vsapi->propGetInt(in, "grid", 0, &err);
+	d.grid = int64ToIntS(vsapi->propGetInt(in, "grid", 0, &err));
 	if (err)
 	{
 		d.grid = 16;
@@ -580,7 +587,7 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 		vsapi->freeNode(d.nodeB);
 		return;
 	}
-	d.thresh = vsapi->propGetFloat(in, "thresh", 0, &err);
+	d.thresh = (float)vsapi->propGetFloat(in, "thresh", 0, &err);
 	if (err)
 	{
 		d.thresh = 0.45f;
@@ -613,7 +620,7 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 
 		for (int p = 0; p < 3; p++)
 		{
-			d.rgb[p] = vsapi->propGetInt(in, "rgb", p, &err);
+			d.rgb[p] = int64ToIntS(vsapi->propGetInt(in, "rgb", p, &err));
 
 			 if (err)
 			{
@@ -655,7 +662,7 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 		}
 		for (int p = 0; p < 3; p++)
 		{
-			d.yuv[p] = vsapi->propGetInt(in, "yuv", p, &err);
+			d.yuv[p] = int64ToIntS(vsapi->propGetInt(in, "yuv", p, &err));
 
 			if (err)
 			{

@@ -10,8 +10,8 @@ This filter operates in freq domain (2d) and improves image having blurred image
   ringing. Scale is applied to bring image to acceptable levels.  
 
 Author V.C.Mohan. 
-11 jun 2015, 22 May 2021
-  Copyright (C) <2008-2021>  <V.C.Mohan>
+11 jun 2015, 22 May 2021 21 dec 2025
+  Copyright (C) <2008-2026>  <V.C.Mohan>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -120,18 +120,20 @@ static void VS_CC f2qsharpInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		free(d);
 		return;
 	}
-	 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->fsize);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->fsize);
 
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * d->fqsize);// +1 is only a safeguard not really reqd
-	
-				// creates forward and inverse fft plans
-	d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * d->fqsize);
-			//  forward for padded size complex to complex  
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf,  FFTW_MEASURE);
-			// inverse 
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->fqsize);// +1 is only a safeguard not really reqd
 
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf,  FFTW_MEASURE);
+					// creates forward and inverse fft plans
+		d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * d->fqsize);
+		//  forward for padded size complex to complex  
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		// inverse 
+
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+	}
 
 			// draw PSF for the specified   blur value. 
 
@@ -293,14 +295,16 @@ static const VSFrameRef *VS_CC f2qsharpGetFrame(int n, int activationReason, voi
 static void VS_CC f2qsharpFree(void *instanceData, VSCore *core, const VSAPI *vsapi) 
 {
     F2QSharpData *d = (F2QSharpData *)instanceData;
-	
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pinv);
-    vsapi->freeNode(d->node);
-	// release buffers
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	d->fftwf_free(d->FreqFilter);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pinv);
+		vsapi->freeNode(d->node);
+		// release buffers
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		d->fftwf_free(d->FreqFilter);
+	}
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
     free(d);

@@ -7,9 +7,9 @@ This plugin needs any one of libfftw3f-3.dll 32bit and 64bit of FFTW.org to resi
 (may be windows\system32 folder, or wow)
 
 Author V.C.Mohan.
-28 July 2020, 22 May 2021
+28 July 2020, 22 May 2021  21 dec 2025
 
-Copyright (C) <2020- 2021>  <V.C.Mohan>
+Copyright (C) <2020- 2026>  <V.C.Mohan>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -137,16 +137,20 @@ static void VS_CC f2qcorrInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 		free (d);
 		return;
 	}
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
-	d->Bfreq = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
 
-	
-	// We require forward  and inverse transform plans.
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_ESTIMATE);
-	// inverse so complex to real used
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_ESTIMATE);	
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
+		d->Bfreq = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
+
+
+		// We require forward  and inverse transform plans.
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_ESTIMATE);
+		// inverse so complex to real used
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_ESTIMATE);
+	}
 	
 }
 
@@ -458,11 +462,16 @@ static void VS_CC f2qcorrFree(void *instanceData, VSCore *core, const VSAPI *vsa
 	F2QCorrData *d = (F2QCorrData *)instanceData;
 	vsapi->freeNode(d->node[0]);
 	vsapi->freeNode(d->node[1]);
-	d-> fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	d->fftwf_free(d->Bfreq);
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pinv);
+
+	{
+
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		d->fftwf_free(d->Bfreq);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pinv);
+	}
 	if (d->txt && d->ofile != NULL)
 		fclose(d->ofile);
 	free(d);

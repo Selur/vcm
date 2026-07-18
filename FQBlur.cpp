@@ -4,8 +4,8 @@ This filter operates in freq domain (2d) and blurs
 linear (motion) or circular (focus) styles within a window
 
 Author V.C.Mohan. 
-12 june 2015, 26 May 2021
-Copyright (C) < 2008- 2021>  <V.C.Mohan>
+12 june 2015, 26 May 2021 19 dec 2025
+Copyright (C) < 2008- 2026>  <V.C.Mohan>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -130,34 +130,38 @@ static void VS_CC f2qblurInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 	int fqsize = d->hbest * d->bestR;
 	int isizeUV = d->hbestUV * d->wbestUV;
 	int fqsizeUV = d->hbestUV * d->bestRUV;
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * isize);
 
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * fqsize);// +1 is only a safeguard not really reqd
-
-		
-			// creates forward and inverse fft plans
-
-	d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * fqsize);
-
-			//  forward for padded size complex to complex  
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf,  FFTW_MEASURE);
-			// inverse 
-
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf,  FFTW_MEASURE);
-
-
-	if (subH != 0 || subW != 0)
 	{
-		d->FreqFilterUV = (float*)d->fftwf_malloc(sizeof(float) * fqsizeUV);
-		d->pfUV = d->fftwf_plan_dft_r2c_2d(d->hbestUV, d->wbestUV, d->inBuf, d->outBuf, FFTW_MEASURE);
-		d->pinvUV = d->fftwf_plan_dft_c2r_2d(d->hbestUV, d->wbestUV, d->outBuf, d->inBuf, FFTW_MEASURE);
-	}
-	else
-	{
-		d->FreqFilterUV = d->FreqFilter;
-		d-> pfUV = d->pf;
-		d->pinvUV = d->pinv;
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * isize);
+
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * fqsize);// +1 is only a safeguard not really reqd
+
+
+				// creates forward and inverse fft plans
+
+		d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * fqsize);
+
+		//  forward for padded size complex to complex  
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		// inverse 
+
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+
+
+		if (subH != 0 || subW != 0)
+		{
+			d->FreqFilterUV = (float*)d->fftwf_malloc(sizeof(float) * fqsizeUV);
+			d->pfUV = d->fftwf_plan_dft_r2c_2d(d->hbestUV, d->wbestUV, d->inBuf, d->outBuf, FFTW_MEASURE);
+			d->pinvUV = d->fftwf_plan_dft_c2r_2d(d->hbestUV, d->wbestUV, d->outBuf, d->inBuf, FFTW_MEASURE);
+		}
+		else
+		{
+			d->FreqFilterUV = d->FreqFilter;
+			d->pfUV = d->pf;
+			d->pinvUV = d->pinv;
+		}
 	}
 
 	int count = DrawPSF(d->inBuf, d->line, d-> xcoord, d-> ycoord, d->wbest, d->hbest, 0.0);	// we can add spike to mellow inversion
@@ -364,17 +368,20 @@ static const VSFrameRef *VS_CC f2qblurGetFrame(int n, int activationReason, void
 static void VS_CC f2qblurFree(void *instanceData, VSCore *core, const VSAPI *vsapi) 
 {
     F2QBlurData *d = (F2QBlurData *)instanceData;
-	if (d->FreqFilterUV != d->FreqFilter)
-		d->fftwf_free(d->FreqFilterUV);
-	d->fftwf_free(d->FreqFilter);
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	if (d->pf != d->pfUV)
-		d->fftwf_destroy_plan(d->pfUV);
-	d->fftwf_destroy_plan(d->pf);
-	if (d->pinv != d->pinvUV)
-		d->fftwf_destroy_plan(d->pinvUV);
-	d->fftwf_destroy_plan(d->pinv);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		if (d->FreqFilterUV != d->FreqFilter)
+			d->fftwf_free(d->FreqFilterUV);
+		d->fftwf_free(d->FreqFilter);
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		if (d->pf != d->pfUV)
+			d->fftwf_destroy_plan(d->pfUV);
+		d->fftwf_destroy_plan(d->pf);
+		if (d->pinv != d->pinvUV)
+			d->fftwf_destroy_plan(d->pinvUV);
+		d->fftwf_destroy_plan(d->pinv);
+	}
 
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
@@ -509,5 +516,5 @@ static void VS_CC f2qblurCreate(const VSMap *in, VSMap *out, void *userData, VSC
 // It is called automatically, when the plugin is loaded to see which functions this filter contains.
 
 
-    registerFunc("fqBlur", "clip:clip;line:int:opt;x:int:opt;y:int:opt;", Create_FQRestore, 0);
+    registerFunc("F2QBlur", "clip:clip;line:int:opt;x:int:opt;y:int:opt;", Create_FQRestore, 0);
 */			

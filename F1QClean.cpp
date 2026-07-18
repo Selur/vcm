@@ -7,9 +7,9 @@ filters, filter can be custom designed.
   FFTW3 dll, fftw.dll to reside in path (may be windows\system32 folder)
   
 Author V.C.Mohan. 
-jun 2015, 14 sep 2020, 26 May 2021
+jun 2015, 14 sep 2020, 26 May 2021  21 dec 2025
 
-  Copyright (C) <2014 - 2021>  <V.C.Mohan>
+  Copyright (C) <2014 - 2026>  <V.C.Mohan>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -130,22 +130,27 @@ static void VS_CC f1qcleanInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 			FreeLibrary(d->hinstLib);
 		vsapi->freeNode(d->node);
 		return;
-	}	
-	 // create fft plans. Requires buffers 
-	d->inBuf =  (float *)d->fftwf_malloc (sizeof(float) * d->wbest );
-
-	d->outBuf = (fftwf_complex*) d->fftwf_malloc (sizeof(fftwf_complex) * d->freqWidth);
-
-	if (d->option == 2) // F2QClean auto sets it to 2
-	{
-		d->ampSquareBuf = (float*)d->fftwf_malloc(sizeof(float) * d->freqWidth);	
-
-		d->sortBuf = (float**)vs_aligned_malloc(sizeof(float*) * d->span, 32);
 	}
-			// get fft sine cosine config buffers allocated by plans	
-	d->pf = d-> fftwf_plan_dft_r2c_1d( d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
 
-	d->pin = d->fftwf_plan_dft_c2r_1d( d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+	{
+
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// create fft plans. Requires buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest);
+
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->freqWidth);
+
+		if (d->option == 2) // F1QClean auto sets it to 2
+		{
+			d->ampSquareBuf = (float*)d->fftwf_malloc(sizeof(float) * d->freqWidth);
+
+			d->sortBuf = (float**)vs_aligned_malloc(sizeof(float*) * d->span, 32);
+		}
+		// get fft sine cosine config buffers allocated by plans	
+		d->pf = d->fftwf_plan_dft_r2c_1d(d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+
+		d->pin = d->fftwf_plan_dft_c2r_1d(d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+	}
 	
 }
 
@@ -167,7 +172,7 @@ void f1qCleanProcessFull(F1QClean* d, const finc * sp, finc * dp, const int pitc
 
 		scaleValues(d->outBuf, d->freqWidth, scale);
 
-		if (d->option == 2)		// F2QClean
+		if (d->option == 2)		// F1QClean
 		{
 			//search  spectrum between from and upto
 			getAmpSqValues(d->ampSquareBuf, d->outBuf, d->freqWidth);
@@ -175,7 +180,7 @@ void f1qCleanProcessFull(F1QClean* d, const finc * sp, finc * dp, const int pitc
 			cleanOutBuf(d->outBuf, d->ampSquareBuf, d->sortBuf, d->span, d->from, d->upto, d->freqWidth);
 		}
 
-		else if (d->option == 1)		// F2QLimit
+		else if (d->option == 1)		// F1QLimit
 		{
 			for (int i = 0; i < d->nfrequencies; i++)
 			{
@@ -345,15 +350,19 @@ static void VS_CC f1qcleanFree(void *instanceData, VSCore *core, const VSAPI *vs
 {
     F1QClean *d = (F1QClean *)instanceData;
     vsapi->freeNode(d->node);
-	if (d->option == 2)
 	{
-		d->fftwf_free(d->ampSquareBuf);
-		vs_aligned_free(d->sortBuf);
+		std::lock_guard<std::mutex> guard(g_mutex);
+		if (d->option == 2)
+		{
+			d->fftwf_free(d->ampSquareBuf);
+			vs_aligned_free(d->sortBuf);
+		}
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pin);
 	}
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pin);
+
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
 	

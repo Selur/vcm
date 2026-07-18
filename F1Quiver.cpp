@@ -1,3 +1,9 @@
+
+
+
+
+
+
 /* This file contains a  f1quiver function of FFTQuiver plugin for vapoursynth
 // Row by row the image is transormed into frequency domain, frequency filtered and 
 transformed back into row. In addition to a large number of Butterworth
@@ -7,9 +13,9 @@ filters, filter can be custom designed.
   FFTW3 dll, fftw.dll to reside in path (may be windows\system32 folder)
   
 Author V.C.Mohan. 
-jun 2015, 14 sep 2020, 18 May 2021
+jun 2015, 14 sep 2020, 18 May 2021	18 Dec 2025 
 
-  Copyright (C) <2014 - 2021>  <V.C.Mohan>
+  Copyright (C) <2014 - 2026>  <V.C.Mohan>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -116,20 +122,23 @@ static void VS_CC f1quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		vsapi->freeNode(d->node);
 		return;
 	}
+	{
+		// Locks the mutex here
+		std::lock_guard<std::mutex> guard(g_mutex);
 
-	
-	 // create fft plans. Requires buffers temporarily
-	d->inBuf =  (float *)d->fftwf_malloc (sizeof(float) * d->wbest );
+		// create fft plans. Requires buffers temporarily
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest);
 
-	d->outBuf = (fftwf_complex*) d->fftwf_malloc (sizeof(fftwf_complex) * (d->wbest/2+1));
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * (d->wbest / 2 + 1));
 
-	d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * (d->wbest / 2 + 1));	// filter buffer
+		d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * (d->wbest / 2 + 1));	// filter buffer
 
 			// get fft sine cosine config buffers allocated by plan
-	
-	d->pf = d-> fftwf_plan_dft_r2c_1d( d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
 
-	d->pin = d->fftwf_plan_dft_c2r_1d( d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+		d->pf = d->fftwf_plan_dft_r2c_1d(d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+
+		d->pin = d->fftwf_plan_dft_c2r_1d(d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
+	}
 
 	
 			// initialize freq response buffer with value of one
@@ -426,8 +435,14 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 		//float* inBuf = (float*)d->fftwf_malloc(sizeof(float) * iwidth);
 
 		//fftwf_complex* outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * owidth);
+		// 
+		float* powerspect;
 		// in test processing we are not particular about time optimization
-		float* powerspect = (float*)d->fftwf_malloc(sizeof(float) * iwidth);
+		{
+			// Locks the mutex here
+			std::lock_guard<std::mutex> guard(g_mutex);
+			powerspect = (float*)d->fftwf_malloc(sizeof(float) * iwidth);
+		}
 
 		if (fi->sampleType == stInteger)
 		{
@@ -471,7 +486,7 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 
 				if (pmax > 0.1f)	// pmax normally should be a large value dc value * nrows. zero only for a black clip
 				{
-					f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, pscale,
+					f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, (float)pscale,
 						pmax, d->gamma, panelh, d->wbest,
 						wd, pitch, dp, max);
 				}
@@ -521,7 +536,7 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 
 				if (pmax > 0.1f)	// pmax normally should be a large value dc value * nrows. zero only for a black clip
 				{
-					f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, pscale, pmax, d->gamma, panelh, d->wbest,
+					f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, (float)pscale, pmax, d->gamma, panelh, d->wbest,
 						wd, pitch, dp, max);
 				}
 
@@ -536,7 +551,7 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 			const float* sp = (const float*)srcp;
 			float* dp = (float*)dstp;
 
-			float  gray = fi->colorFamily == cmRGB ? 0.5f : 0.0; // plane 1 & 2
+			float  gray = fi->colorFamily == cmRGB ? 0.5f : 0.0f; // plane 1 & 2
 			float  max = 1.0f;	// for plane 0
 			float  zero = 0.0f; // plane 0
 
@@ -573,7 +588,7 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 
 			if (pmax > 0.1f)	// pmax normally should be a large value dc value * nrows. zero only for a black clip
 			{
-				f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, pscale, pmax, d->gamma, panelh, d->wbest,
+				f1DisplayPowerSpectrumAndFilter(powerspect, d->FreqFilter, (float)pscale, pmax, d->gamma, panelh, d->wbest,
 					wd, pitch, dp, max);
 			}
 
@@ -591,7 +606,11 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 				wd * nbytes, ht);
 		}
 
-		d->fftwf_free(powerspect);
+		{
+			// Locks the mutex here
+			std::lock_guard<std::mutex> guard(g_mutex);
+			d->fftwf_free(powerspect);
+		}
 		vsapi->freeFrame(src);
 		return dst;
 	}
@@ -603,14 +622,18 @@ static const VSFrameRef* VS_CC f1qtestGetFrame(int n, int activationReason, void
 static void VS_CC f1quiverFree(void *instanceData, VSCore *core, const VSAPI *vsapi)
 {
     F1QuiverData *d = (F1QuiverData *)instanceData;
-    vsapi->freeNode(d->node);
-	d->fftwf_free (d->FreqFilter);
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	if (d->logLUT != NULL)
-		d->fftwf_free(d->logLUT);
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pin);
+	{
+		// Locks the mutex here
+		std::lock_guard<std::mutex> guard(g_mutex);
+		vsapi->freeNode(d->node);
+		d->fftwf_free(d->FreqFilter);
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		if (d->logLUT != NULL)
+			d->fftwf_free(d->logLUT);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pin);
+	}
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
     free(d);
@@ -651,7 +674,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
     // strict checking because of what we wrote in the argument string, the only
     // reason this could fail is when the value wasn't set by the user.
     // And when it's not set we want it to default to enabled.
-    temp =  vsapi->propGetInt(in, "test", 0, &err);
+    temp = ! ! int64ToIntS(vsapi->propGetInt(in, "test", 0, &err));
     if (err)
         d.test = false;
 	else
@@ -665,7 +688,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	else
 		d.test = temp == 0? false : true;
 
-	temp =   vsapi->propGetInt(in, "custom", 0, &err);
+	temp = ! ! int64ToIntS(vsapi->propGetInt(in, "custom", 0, &err));
     if (err)
         d.custom = false;
 	else
@@ -679,7 +702,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	else
 		d.custom = temp == 0? false : true;
 
-	temp =   vsapi->propGetInt(in, "morph", 0, &err);
+	temp = ! ! int64ToIntS(vsapi->propGetInt(in, "morph", 0, &err));
     if (err)
         d.morph = false;
 	else
@@ -694,7 +717,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	else
 		d.morph = temp == 0? false : true;
 
-	d.row = vsapi->propGetInt(in, "strow", 0, &err);
+	d.row = int64ToIntS(vsapi->propGetInt(in, "strow", 0, &err));
 	if(err)
 		d.row = 0;
 	else
@@ -708,7 +731,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		}
     }
 
-	d.nrows = vsapi->propGetInt(in, "nrows", 0, &err);
+	d.nrows = int64ToIntS(vsapi->propGetInt(in, "nrows", 0, &err));
 
 	if(err)
 		d.nrows = d.vi->height / 2;
@@ -732,13 +755,13 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 			return;
 		}
 
-		d.gamma = vsapi->propGetFloat(in, "gamma", 0, &err);
+		d.gamma = (float)vsapi->propGetFloat(in, "gamma", 0, &err);
 
 		if(err)
-			d.gamma = 0.05;
+			d.gamma = 0.05f;
 		else
 		{
-			if(d.gamma < 0.00001 || d.gamma > 1.0f)
+			if(d.gamma < 0.00001f || d.gamma > 1.0f)
 			{
 			
 				vsapi->setError(out, "F1Quiver: gamma must be +ve and less than 1.0");
@@ -761,7 +784,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		temp = -1;
 		for ( int i = 0; i < d.npoints; i += 2)
 		{
-			d.Fspec[i] = vsapi->propGetInt(in, "filter", i, 0);
+			d.Fspec[i] = int64ToIntS(vsapi->propGetInt(in, "filter", i, 0));
 
 			if(d.Fspec[i] <= temp || d.Fspec[i] > NYQUIST)
 			{
@@ -772,7 +795,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 			temp = d.Fspec[i];
 
-			d.Fspec[i + 1] = vsapi->propGetInt(in, "filter", i + 1, 0);
+			d.Fspec[i + 1] = int64ToIntS(vsapi->propGetInt(in, "filter", i + 1, 0));
 
 			if(d.Fspec[i+ 1] <= 0 || d.Fspec[i+ 1] > 100)
 			{
@@ -787,7 +810,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	{
 		for ( int i = 0; i < d.npoints; i += 4)
 		{
-			d.Fspec[i ] = vsapi->propGetInt(in, "filter", i , 0);
+			d.Fspec[i ] = int64ToIntS(vsapi->propGetInt(in, "filter", i , 0));
 
 			if(d.Fspec[i] < 0 || d.Fspec[i] > 4)
 			{
@@ -795,7 +818,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 				vsapi->freeNode(d.node);
 				return;
 			}
-			d.Fspec[i + 1] = vsapi->propGetInt(in, "filter", i + 1, 0);
+			d.Fspec[i + 1] = int64ToIntS(vsapi->propGetInt(in, "filter", i + 1, 0));
 
 			if(d.Fspec[i+ 1] <= 0 || d.Fspec[i+ 1] > NYQUIST)
 			{
@@ -804,7 +827,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 				return;
 			}
 
-			d.Fspec[i + 2] = vsapi->propGetInt(in, "filter", i + 2, 0);
+			d.Fspec[i + 2] = int64ToIntS(vsapi->propGetInt(in, "filter", i + 2, 0));
 
 			if ( d.Fspec[0] == 3 && (d.Fspec[i+ 2] < d.Fspec[i + 1] || d.Fspec[i+ 2] > NYQUIST) )
 			{
@@ -819,7 +842,7 @@ static void VS_CC f1quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 				return;
 			}
 
-			d.Fspec[i + 3] = vsapi->propGetInt(in, "filter", i + 3, 0);
+			d.Fspec[i + 3] = int64ToIntS(vsapi->propGetInt(in, "filter", i + 3, 0));
 
 			if(d.Fspec[i+ 3] <= 0 || d.Fspec[i+ 3] > 12)
 			{

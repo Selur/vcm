@@ -14,7 +14,7 @@ This plugin needs any one of libfftw3f-3.dll, FFTW3 dll, fftw.dll to reside in p
 (may be windows\system32 folder)
 
 Author V.C.Mohan.
-Jun 2015, 18 May 2021
+Jun 2015, 18 May 2021, 18 dec 2025
 
 Copyright (C) <2006, 2021>  <V.C.Mohan>
 
@@ -123,36 +123,41 @@ static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		vsapi->freeNode(d->node);
 		return;
 	}
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
-	
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
-	
 
-	if(d->inBuf == NULL || d->outBuf == NULL )
 	{
-		vsapi->setError(out, "F2Quiver: unexpectedly buffers not allocated error");
-		vsapi->freeNode(d->node);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
-	}
-	
+		std::lock_guard<std::mutex> guard(g_mutex);
 
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE );
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE );
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
 
-	if(  d->pf == NULL || d->pinv == NULL)
-	{
-		vsapi->setError(out, "F2Quiver: unexpected  fft plans  error");
-		vsapi->freeNode(d->node);
-		d->fftwf_free(d->inBuf);
-		d->fftwf_free(d->outBuf);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
+
+
+		if (d->inBuf == NULL || d->outBuf == NULL)
+		{
+			vsapi->setError(out, "F2Quiver: unexpectedly buffers not allocated error");
+			vsapi->freeNode(d->node);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			free(d);
+			return;
+		}
+
+
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+
+		if (d->pf == NULL || d->pinv == NULL)
+		{
+			vsapi->setError(out, "F2Quiver: unexpected  fft plans  error");
+			vsapi->freeNode(d->node);
+			d->fftwf_free(d->inBuf);
+			d->fftwf_free(d->outBuf);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			free(d);
+			return;
+		}
 	}
 	int nbits = d->vi->format->bitsPerSample;
 
@@ -572,12 +577,15 @@ static const VSFrameRef *VS_CC f2quiverGetFrame(int n, int activationReason, voi
 // Free all allocated data on filter destruction
 static void VS_CC f2quiverFree(void *instanceData, VSCore *core, const VSAPI *vsapi) 
 {
+
     F2QuiverData *d = (F2QuiverData *)instanceData;
     vsapi->freeNode(d->node);
 	if (d->FreqFilter != NULL)
 		vs_aligned_free(d->FreqFilter);
 	if( d->logLUT != NULL)
 		vs_aligned_free(d->logLUT);
+
+	std::lock_guard<std::mutex> guard(g_mutex);
 	d->fftwf_destroy_plan (d->pf);
 	d->fftwf_destroy_plan ( d->pinv);
 	d->fftwf_free(d->inBuf);
@@ -618,7 +626,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		vsapi->freeNode(d.node);
 		return;
 	}
-	temp = !!vsapi->propGetInt(in, "ham", 0, &err);
+	temp = !!int64ToIntS(vsapi->propGetInt(in, "ham", 0, &err));
 	if (err)
 		d.ham = false;
 	else
@@ -626,7 +634,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	if (d.ham)
 	{
 		int maxfrad = (d.vi->height > d.vi->width ? d.vi->height : d.vi->width);
-		temp = vsapi->propGetInt(in, "frad", 0, &err);
+		temp = int64ToIntS(vsapi->propGetInt(in, "frad", 0, &err));
 		if (err)
 			temp = 32;
 		else
@@ -641,7 +649,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		d.frad = (maxfrad * temp) / 100;
 	}
 
-	temp = !!vsapi->propGetInt(in, "test", 0, &err);
+	temp = !!int64ToIntS(vsapi->propGetInt(in, "test", 0, &err));
 	if(err)
 		d.test = false;
 	else
@@ -659,7 +667,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	}
 
 	for ( int i = 0; i < d.npoints; i ++)
-		d.Fspec[i] = vsapi->propGetInt(in, "fspec", i, 0);
+		d.Fspec[i] = int64ToIntS(vsapi->propGetInt(in, "fspec", i, 0));
 	
 	for ( int i = 0; i < d.npoints; i += 5)
 	{
@@ -754,7 +762,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		}
 	}
 
-	temp = vsapi->propGetInt(in, "morph", 0, &err);
+	temp = !! int64ToIntS(vsapi->propGetInt(in, "morph", 0, &err));
 
 	if(err)
 	{ 
@@ -774,9 +782,9 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 	if( d.test)
 	{
-		d.gamma = vsapi->propGetFloat(in, "gamma", 0, &err);
+		d.gamma = (float)vsapi->propGetFloat(in, "gamma", 0, &err);
 		if(err)
-			d.gamma = 0.05;
+			d.gamma = 0.05f;
 		else
 		{
 			if ( d.gamma < 1e-5 || d.gamma > 5.0)

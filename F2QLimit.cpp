@@ -134,39 +134,47 @@ static void VS_CC f2qlimitInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		vsapi->freeNode(d->node);
 		return;
 	}
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
-	
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
-	
 
-	if(d->inBuf == NULL || d->outBuf == NULL )
 	{
-		vsapi->setError(out, "F2QLimit: unexpectedly buffers not allocated error");
-		vsapi->freeNode(d->node);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
+
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
+
+		if (d->inBuf != NULL)
+		{
+
+			d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
+			if (d->outBuf == NULL)
+				d->fftwf_free(d->inBuf);
+		}
+
+		if (d->inBuf == NULL || d->outBuf == NULL)
+		{
+			vsapi->setError(out, "F2QLimit: unexpectedly buffers not allocated error");
+			vsapi->freeNode(d->node);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			free(d);
+			return;
+		}
+
+
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+
+		if (d->pf == NULL || d->pinv == NULL)
+		{
+			vsapi->setError(out, "F2QLimit: unexpected  fft plans  error");
+			vsapi->freeNode(d->node);
+			d->fftwf_free(d->inBuf);
+			d->fftwf_free(d->outBuf);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			free(d);
+			return;
+		}
 	}
-	
-
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE );
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE );
-
-	if(  d->pf == NULL || d->pinv == NULL)
-	{
-		vsapi->setError(out, "F2QLimit: unexpected  fft plans  error");
-		vsapi->freeNode(d->node);
-		d->fftwf_free(d->inBuf);
-		d->fftwf_free(d->outBuf);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
-	}
-	
-
 	
 }
 //-----------...........................................
@@ -335,7 +343,7 @@ static void VS_CC f2qlimitCreate(const VSMap *in, VSMap *out, void *userData, VS
     F2QLimitData d;
     F2QLimitData *data;
     int err;
-	int temp;
+	//int temp;
 	
     // Get a clip reference from the input arguments. This must be freed later.
     d.node = vsapi->propGetNode(in, "clip", 0, 0);
