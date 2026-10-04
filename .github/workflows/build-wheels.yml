@@ -19,7 +19,7 @@ jobs:
           - { name: Linux x86_64, os: ubuntu-latest, archs: x86_64 }
           - { name: macOS arm64, os: macos-14, archs: arm64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # fftw3f is linked statically on every platform so the plugin has no run time dependencies.
       - name: Install fftw3 (vcpkg, static CRT)
@@ -37,7 +37,7 @@ jobs:
         run: bash ci/build-fftw.sh ${{ github.workspace }}/fftw-prefix
 
       - name: Build wheel
-        uses: pypa/cibuildwheel@v2.21
+        uses: pypa/cibuildwheel@v3.4
         env:
           # The plugin only uses the VapourSynth C API, so one interpreter is enough;
           # the wheel is re-tagged to py3-none below.
@@ -57,7 +57,7 @@ jobs:
           CIBW_CONFIG_SETTINGS_WINDOWS: setup-args=--vsenv setup-args=-Db_vscrt=mt setup-args=-Dprefer_static=true setup-args=-Dfftw3_dir=${{ env.FFTW3_DIR }}
           # The installed wheel is autoloaded, so the test needs no plugin path.
           CIBW_TEST_REQUIRES: numpy
-          CIBW_TEST_COMMAND: python {project}/test/test_vcm.py
+          CIBW_TEST_COMMAND: python -X faulthandler -u {project}/test/test_vcm.py
 
       - name: Re-tag wheel as Python-independent
         shell: bash
@@ -75,12 +75,12 @@ jobs:
           cp -r docs plugin/
           ls -l plugin
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: wheel-${{ matrix.os }}
           path: wheelhouse/*.whl
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: plugin-${{ matrix.os }}
           path: plugin/
@@ -93,12 +93,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: plugin-*
           path: plugins
@@ -107,7 +107,7 @@ jobs:
           cd plugins
           for d in plugin-*; do (cd "$d" && zip -r "../../dist/vcm-${{ github.ref_name }}-${d#plugin-}.zip" .); done
           ls -l ../dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.whl
