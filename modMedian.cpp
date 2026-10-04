@@ -160,7 +160,8 @@ void AdMed ( const finc *fp, finc  *wp, const int pitch,
 				
 				fillUpBuffer(fp + h * pitch + w, start, full, LUT, tbuf);
 				// get minimum, maximum
-				getMinAndMax<finc>(minmaxmed, tbuf + start, full);
+				// only the samples added by this grid size are new, the others are already in minmaxmed
+				getMinAndMax<finc>(minmaxmed, tbuf + start, full - start);
 
 				if (minmaxmed[1] - minmaxmed[0] <= tolr)
 				{					

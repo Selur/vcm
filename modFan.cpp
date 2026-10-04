@@ -40,8 +40,8 @@ void FanFilterPlane(finc * op, int opitch,
 
 	for (int h = 0; h < bht; h++)
 	{
-
-		int kbw = kb * span2;
+		// op already points at column span2, so the central value of column w is op[kbw]
+		int kbw = 0;
 		// span is odd number
 		
 

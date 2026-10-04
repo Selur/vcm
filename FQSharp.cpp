@@ -106,7 +106,7 @@ static void f2qsharpInit(const VSMap *in, VSMap *out, void **instanceData, VSCor
 	int nbits = fi->bitsPerSample;	
 	
 	d->fsize = d->hbest * d->wbest;
-	int fqsize = d->hbest * d->frqwidth;
+	d->fqsize = d->hbest * d->frqwidth;	// was a local that shadowed the member, leaving d->fqsize uninitialized
 
 #include "ConstructorCodeForLateBindingfft.cpp"
 
