@@ -29,8 +29,9 @@ endif
 fftw3_dir = get_option('fftw3_dir')
 if fftw3_dir != ''
   fftw3f_lib = cpp.find_library('fftw3f', dirs : [fftw3_dir / 'lib'], static : get_option('prefer_static'))
+  # compile_args instead of include_directories(): the prefix may be an absolute path (even inside the source tree)
   fftw3f_dep = declare_dependency(
-    include_directories : include_directories(fftw3_dir / 'include'),
+    compile_args : ['-I' + fftw3_dir / 'include'],
     dependencies : fftw3f_lib)
 else
   fftw3f_dep = dependency('fftw3f')
