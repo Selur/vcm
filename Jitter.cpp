@@ -28,7 +28,7 @@ Author : V.C.Mohan
 
 
 typedef struct {
-	VSNodeRef *node;
+	VSNode *node;
 	const VSVideoInfo *vi;
 	int type;	//  jitter type 1.rand (random), 2.sine(sinusoid)
 	int jmax;	// max amplitude of jitter to insert
@@ -55,17 +55,16 @@ typedef struct {
 	void fillColor(finc * rp, int shiftval, finc color);
 
 //--------------------------------------------------------------------------------------
-	static void VS_CC jitterInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
-	{
+	static void jitterInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
+{
 		JitterData *d = (JitterData *)* instanceData;
-		vsapi->setVideoInfo(d->vi, 1, node);
 
 		d->shift = NULL;
 
 		if (d->type == 1)
 
 		{
-			d->shift = (int*)vs_aligned_malloc<int>(sizeof(int) * d->vi->height, 32);
+			d->shift = (int*)vsh_aligned_malloc<int>(sizeof(int) * d->vi->height, 32);
 
 			d->modulo = d->vi->height;
 
@@ -89,7 +88,7 @@ typedef struct {
 		}
 		else if (d->type == 2)
 		{
-			d->shift = (int *)vs_aligned_malloc<int>(sizeof(int) * d->wl, 32);
+			d->shift = (int *)vsh_aligned_malloc<int>(sizeof(int) * d->wl, 32);
 
 			d->modulo = d->wl;
 
@@ -115,8 +114,8 @@ typedef struct {
 	{
 		JitterData *d = (JitterData *)instanceData;
 		vsapi->freeNode(d->node);
+		vsh_aligned_free(d->shift);
 		free(d);
-		vs_aligned_free(d->shift);
 	}
 //------------------------------------------------------------------
 
@@ -185,9 +184,8 @@ void fillColor(finc * rp, int shiftval, finc color)
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC jitterGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-	JitterData *d = (JitterData *)* instanceData;
+static const VSFrame *VS_CC jitterGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+	JitterData *d = (JitterData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -196,14 +194,14 @@ static const VSFrameRef *VS_CC jitterGetFrame(int n, int activationReason, void 
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat *fi = d->vi->format;
+		const VSVideoFormat *fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
 		int width = vsapi->getFrameWidth(src, 0);
-		VSFrameRef *dst = vsapi->copyFrame(src, core);
+		VSFrame *dst = vsapi->copyFrame(src, core);
 		int nplanes = fi->numPlanes;
 		int nbytes = fi->bytesPerSample;
 		int nbits = fi->bitsPerSample;
@@ -237,7 +235,7 @@ static const VSFrameRef *VS_CC jitterGetFrame(int n, int activationReason, void 
 			frameShift = n * d->fmove;
 		}
 
-		int col[] = { 0, fi->colorFamily == cmYUV ? 127 : 0, fi->colorFamily == cmYUV ? 127 : 0 };
+		int col[] = { 0, fi->colorFamily == cfYUV ? 127 : 0, fi->colorFamily == cfYUV ? 127 : 0 };
 
 		
 		for (int h = 0; h < height; h++)
@@ -295,73 +293,74 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	int temp;
 	
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 
 	// In this integer and float. Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi)) // || d.vi->format->sampleType != stInteger || d.vi->format->bitsPerSample != 8)
+	if (!isConstantVideoFormat(d.vi)) // || d.vi->format.sampleType != stInteger || d.vi->format.bitsPerSample != 8)
 	{
-		vsapi->setError(out, "Jitter: format of clip must be constant");
+		vsapi->mapSetError(out, "Jitter: format of clip must be constant");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV  && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV  && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "Jitter: only RGB or YUV or Gray color formats allowed");
+		vsapi->mapSetError(out, "Jitter: only RGB or YUV or Gray color formats allowed");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	if (d.vi->format->subSamplingH != 0 || d.vi->format->subSamplingW != 0)
+	if (d.vi->format.subSamplingH != 0 || d.vi->format.subSamplingW != 0)
 	{
-		vsapi->setError(out, "Jitter: color planes should have no subsampling");
+		vsapi->mapSetError(out, "Jitter: color planes should have no subsampling");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
 
-	temp = vsapi->propGetInt(in, "type", 0, &err);
+	temp = vsapi->mapGetInt(in, "type", 0, &err);
 
 	if (err)
 		d.type = 1;
 	else if ( temp < 1 || temp > 2)
 	{
-		vsapi->setError(out, "Jitter: type can have a value of 1 for random or 2 for sinuoidal jitter only");
+		vsapi->mapSetError(out, "Jitter: type can have a value of 1 for random or 2 for sinuoidal jitter only");
 		vsapi->freeNode(d.node);
 		return;
 	}
+	else
 		d.type = temp;
 
 	if (d.type == 2)
 	{
-		d.wl = vsapi->propGetInt(in, "wl", 0, &err);
+		d.wl = vsapi->mapGetInt(in, "wl", 0, &err);
 
 		if (err)
 			d.wl = d.vi->height / 8;
 
 		else if (d.wl < 8 || d.wl > d.vi->height)
 		{
-			vsapi->setError(out, "Jitter: wavelength wl must be between 8 and frame height ");
+			vsapi->mapSetError(out, "Jitter: wavelength wl must be between 8 and frame height ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	d.jmax = vsapi->propGetInt(in, "jmax", 0, &err);
+	d.jmax = vsapi->mapGetInt(in, "jmax", 0, &err);
 
 	if (err)
 		d.jmax = d.vi->width / 16;
 
 	else if (d.jmax < 8 || d.jmax > d.vi->width / 4)
 	{
-		vsapi->setError(out, "Jitter: jmax the maximum amplitude of jitter should be between 8 and quarter of frame width ");
+		vsapi->mapSetError(out, "Jitter: jmax the maximum amplitude of jitter should be between 8 and quarter of frame width ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	const char *den  = vsapi->propGetData(in, "dense", 0, &err);
+	const char *den  = vsapi->mapGetData(in, "dense", 0, &err);
 	
 	if (err)
 		d.dense = 2;
@@ -373,12 +372,12 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 		d.dense = 3;
 	else 
 	{
-		vsapi->setError(out, "Jitter: dense can be high, med, or low/ only ");
+		vsapi->mapSetError(out, "Jitter: dense can be high, med, or low/ only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	temp = !!vsapi->propGetInt(in, "stat", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "stat", 0, &err);
 	if (err)
 		d.stat = false;
 	else if (temp == 0)
@@ -388,7 +387,7 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
 	if (d.stat)
 	{
-		const char * speed = vsapi->propGetData(in, "speed", 0, &err);
+		const char * speed = vsapi->mapGetData(in, "speed", 0, &err);
 		
 		if (err)
 			d.speed = 2;
@@ -400,7 +399,7 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 			d.speed = 3;
 		else
 		{
-			vsapi->setError(out, "Jitter: speed can be high, med, or low only ");
+			vsapi->mapSetError(out, "Jitter: speed can be high, med, or low only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -423,12 +422,22 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	// need to modify no shared data at all when the filter is running.
 	// For more complicated filters, fmParallelRequests is usually easier to achieve as it can
 	// be prefetched in parallel but the actual processing is serialized.
-	// The others can be considered special cases where fmSerial is useful to source filters and
+	// The others can be considered special cases where fmFrameState is useful to source filters and
 	// fmUnordered is useful when a filter's state may change even when deciding which frames to
 	// prefetch (such as a cache filter).
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "Jitter", jitterInit, jitterGetFrame, jitterFree, fmParallel, 0, data, core);
+	jitterInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "Jitter", data->vi, jitterGetFrame, jitterFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

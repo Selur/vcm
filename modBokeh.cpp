@@ -33,8 +33,8 @@ bokeh filter plugin for vapoursynth by V.C.Mohan
 //----------------------------
 typedef struct
 {
-	VSNodeRef* nodeA;	// input image
-	VSNodeRef* nodeB;	// heavily blurred  image
+	VSNode* nodeA;	// input image
+	VSNode* nodeB;	// heavily blurred  image
 	const VSVideoInfo* vi;
 	int grid;	// 2 to 64 
 	float thresh;	// threshold for descrimination of sharpness in image
@@ -57,12 +57,11 @@ bool isVarSharp(finc* sp, int* Offsets, int noff, float tsq);
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC bokehInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static void bokehInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	BokehData* d = (BokehData*)*instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
-	const VSFrameRef* srcA = vsapi->getFrame(0, d->nodeA, NULL, 0);
-	const VSFormat* fi = d->vi->format;
+	const VSFrame* srcA = vsapi->getFrame(0, d->nodeA, NULL, 0);
+	const VSVideoFormat* fi = &d->vi->format;
 	if (fi->sampleType == stInteger)
 		d->tsq = d->thresh * (1 << fi->bitsPerSample) * d->thresh * (1 << fi->bitsPerSample);
 	else
@@ -73,15 +72,15 @@ static void VS_CC bokehInit(VSMap* in, VSMap* out, void** instanceData, VSNode* 
 	int pitch = vsapi->getStride(srcA, 0) / nBytes;
 	int gPoints = d->grid * d->grid * 4;
 	// size of square encompassing circle of radius = grid
-	d->circleLUT = (int*)vs_aligned_malloc <int>(sizeof(int) * gPoints, 32);
+	d->circleLUT = (int*)vsh_aligned_malloc <int>(sizeof(int) * gPoints, 32);
 
 	d->count = makeCircularLUT(d->circleLUT, pitch, d->grid, 0);
 	vsapi->freeFrame(srcA);
 
 	if ( d->count >= gPoints)
 	{
-		vs_aligned_free(d->circleLUT);
-		vsapi->setError(out, "bokeh:  count are in error");
+		vsh_aligned_free(d->circleLUT);
+		vsapi->mapSetError(out, "bokeh:  count are in error");
 		vsapi->freeNode(d->nodeA);
 		vsapi->freeNode(d->nodeB);
 		return;		
@@ -110,10 +109,9 @@ bool isVarSharp(finc* sp, int* offsets, int noff, float tsq)
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef* VS_CC bokehGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	BokehData* d = (BokehData*)*instanceData;
+static const VSFrame* VS_CC bokehGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	BokehData* d = (BokehData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -123,13 +121,13 @@ static const VSFrameRef* VS_CC bokehGetFrame(int n, int activationReason, void**
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* srcA = vsapi->getFrameFilter(n, d->nodeA, frameCtx);
-		const VSFrameRef* srcB = vsapi->getFrameFilter(n, d->nodeB, frameCtx);
-		VSFrameRef* dst = vsapi->copyFrame(srcB, core);
+		const VSFrame* srcA = vsapi->getFrameFilter(n, d->nodeA, frameCtx);
+		const VSFrame* srcB = vsapi->getFrameFilter(n, d->nodeB, frameCtx);
+		VSFrame* dst = vsapi->copyFrame(srcB, core);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat* fi = d->vi->format;
+		const VSVideoFormat* fi = &d->vi->format;
 
 		int nBytes = fi->bytesPerSample;
 		int pitch = vsapi->getStride(srcA, 0) / nBytes;
@@ -150,13 +148,13 @@ static const VSFrameRef* VS_CC bokehGetFrame(int n, int activationReason, void**
 		// mark which planes are to be skipped 
 		for (int p = 0; p < 3; p++)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 			{
 				// need to convert  rgb to bgr
 				if (d->rgb[p] == 0) proc[2 - p] = false;
 
 			}
-			else if (fi->colorFamily == cmYUV)
+			else if (fi->colorFamily == cfYUV)
 			{
 				if (d->yuv[p] == 0) proc[p] = false;
 			}
@@ -278,7 +276,7 @@ static const VSFrameRef* VS_CC bokehGetFrame(int n, int activationReason, void**
 			}
 		}	// for int h=
 
-		// vs_aligned_free(gridLUT);
+		// vsh_aligned_free(gridLUT);
 		vsapi->freeFrame(srcA);
 		vsapi->freeFrame(srcB);
 		
@@ -296,7 +294,7 @@ static void VS_CC bokehFree(void* instanceData, VSCore* core, const VSAPI* vsapi
 	BokehData* d = (BokehData*)instanceData;
 	vsapi->freeNode(d->nodeA);
 	vsapi->freeNode(d->nodeB);
-	vs_aligned_free(d->circleLUT);
+	vsh_aligned_free(d->circleLUT);
 	free(d);
 }
 
@@ -307,36 +305,36 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 	int err;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.nodeA = vsapi->propGetNode(in, "clip", 0, 0);
+	d.nodeA = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.nodeA);
-	if (d.vi->format->colorFamily != cmRGB 
-		&& d.vi->format->colorFamily != cmYUV
-		&& d.vi->format->colorFamily != cmGray 		
+	if (d.vi->format.colorFamily != cfRGB 
+		&& d.vi->format.colorFamily != cfYUV
+		&& d.vi->format.colorFamily != cfGray 		
 		)
 	{
-		vsapi->setError(out, "bokeh: input must be rgb, yuv or y only.");
+		vsapi->mapSetError(out, "bokeh: input must be rgb, yuv or y only.");
 		vsapi->freeNode(d.nodeA);
 		return;
 	}
-	if ( !isConstantFormat(d.vi)  || d.vi->format->subSamplingH != 0
-		|| d.vi->format->subSamplingW != 0)
+	if ( !isConstantVideoFormat(d.vi)  || d.vi->format.subSamplingH != 0
+		|| d.vi->format.subSamplingW != 0)
 	{
-		vsapi->setError(out, "bokeh: input must be constant and not subsampled");
+		vsapi->mapSetError(out, "bokeh: input must be constant and not subsampled");
 		vsapi->freeNode(d.nodeA);
 		return;
 	}
-	d.nodeB = vsapi->propGetNode(in, "clipb", 0, 0);
+	d.nodeB = vsapi->mapGetNode(in, "clipb", 0, 0);
 	const VSVideoInfo* bvi = vsapi->getVideoInfo(d.nodeB);
 
-	if ( !isSameFormat ( d.vi, bvi) )
+	if ( !isSameVideoInfo( d.vi, bvi) )
 	{
-		vsapi->setError(out, "bokeh: both clips must have identical formats");
+		vsapi->mapSetError(out, "bokeh: both clips must have identical formats");
 		vsapi->freeNode(d.nodeA);
 		vsapi->freeNode(d.nodeB);
 		return;
 	}
 
-	d.grid = vsapi->propGetInt(in, "grid", 0, &err);
+	d.grid = vsapi->mapGetInt(in, "grid", 0, &err);
 
 	if (err)
 	{
@@ -346,13 +344,13 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 	{
 		if (d.grid < 2 || d.grid > 64)
 		{
-			vsapi->setError(out, "bokeh: value of grid must be between 2 and 64");
+			vsapi->mapSetError(out, "bokeh: value of grid must be between 2 and 64");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
 		}
 	}
-	d.thresh = vsapi->propGetFloat(in, "thresh", 0, &err);
+	d.thresh = vsapi->mapGetFloat(in, "thresh", 0, &err);
 
 	if (err)
 	{
@@ -362,19 +360,19 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 	{
 		if (d.thresh < 0.0  || d.thresh > 1.0)
 		{
-			vsapi->setError(out, "bokeh: thresh must be 0 to 1 only");
+			vsapi->mapSetError(out, "bokeh: thresh must be 0 to 1 only");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
 		}
 	}
 
-	if (d.vi->format->colorFamily == cmRGB)
+	if (d.vi->format.colorFamily == cfRGB)
 	{
-		int count = vsapi->propNumElements(in, "rgb");
+		int count = vsapi->mapNumElements(in, "rgb");
 		if (count > 3)
 		{
-			vsapi->setError(out, "f2qBokeh: rgb array cannot have more than 3 entries.");
+			vsapi->mapSetError(out, "f2qBokeh: rgb array cannot have more than 3 entries.");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -388,16 +386,18 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 
 		for (int p = 0; p < 3; p++)
 		{
-			d.rgb[p] = vsapi->propGetInt(in, "rgb", p, &err);
+			int rgbDefault = d.rgb[p];
+			d.rgb[p] = vsapi->mapGetInt(in, "rgb", p, &err);
 
 			if (err)
 			{
-				d.rgb[p] = d.rgb[p - 1];
+				// not given: repeat the previous value, or keep the default for the first one
+				d.rgb[p] = p > 0 ? d.rgb[p - 1] : rgbDefault;
 			}
 
 			else if (d.rgb[p] < 0 || d.rgb[p] > 1)
 			{
-				vsapi->setError(out, "f2qBokeh: rgb array can have values of 0 or 1 only.");
+				vsapi->mapSetError(out, "f2qBokeh: rgb array can have values of 0 or 1 only.");
 				vsapi->freeNode(d.nodeA);
 				vsapi->freeNode(d.nodeB);
 				return;
@@ -406,18 +406,18 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 		}
 		if (d.rgb[0] == 0 && d.rgb[1] == 0 && d.rgb[2] == 0)
 		{
-			vsapi->setError(out, "f2qBokeh: rgb array all values should not be 0");
+			vsapi->mapSetError(out, "f2qBokeh: rgb array all values should not be 0");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
 		}
 	}
-	else if (d.vi->format->colorFamily == cmYUV)
+	else if (d.vi->format.colorFamily == cfYUV)
 	{
-		int count = vsapi->propNumElements(in, "yuv");
+		int count = vsapi->mapNumElements(in, "yuv");
 		if (count > 3)
 		{
-			vsapi->setError(out, "f2qBokeh: yuv array cannot have more than 3 entries.");
+			vsapi->mapSetError(out, "f2qBokeh: yuv array cannot have more than 3 entries.");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -430,16 +430,18 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 		}
 		for (int p = 0; p < 3; p++)
 		{
-			d.yuv[p] = vsapi->propGetInt(in, "yuv", p, &err);
+			int yuvDefault = d.yuv[p];
+			d.yuv[p] = vsapi->mapGetInt(in, "yuv", p, &err);
 
 			if (err)
 			{
-				d.yuv[p] = d.yuv[p - 1];
+				// not given: repeat the previous value, or keep the default for the first one
+				d.yuv[p] = p > 0 ? d.yuv[p - 1] : yuvDefault;
 			}
 
 			else if (d.yuv[p] < 0 || d.yuv[p] > 1)
 			{
-				vsapi->setError(out, "f2qBokeh: yuv array can have values of 0 or 1 only.");
+				vsapi->mapSetError(out, "f2qBokeh: yuv array can have values of 0 or 1 only.");
 				vsapi->freeNode(d.nodeA);
 				vsapi->freeNode(d.nodeB);
 				return;
@@ -448,7 +450,7 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 		}
 		if (d.yuv[0] == 0 && d.yuv[1] == 0 && d.yuv[2] == 0)
 		{
-			vsapi->setError(out, "f2qBokeh: yuv array all values should not be 0");
+			vsapi->mapSetError(out, "f2qBokeh: yuv array all values should not be 0");
 			vsapi->freeNode(d.nodeA);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -463,7 +465,19 @@ static void VS_CC bokehCreate(const VSMap* in, VSMap* out, void* userData, VSCor
 
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "bokeh", bokehInit, bokehGetFrame, bokehFree, fmParallelRequests, 0, data, core);
+	bokehInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[2];
+	int ndeps = 0;
+	if (data->nodeA != NULL)
+		deps[ndeps++] = { data->nodeA, rpGeneral };
+	if (data->nodeB != NULL)
+		deps[ndeps++] = { data->nodeB, rpGeneral };
+	vsapi->createVideoFilter(out, "bokeh", data->vi, bokehGetFrame, bokehFree, fmParallelRequests, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

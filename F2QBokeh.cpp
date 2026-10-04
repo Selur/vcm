@@ -65,8 +65,8 @@ Author V.C.Mohan.
 
 typedef struct
 {
-	VSNodeRef* node;
-	VSNodeRef* nodeB;
+	VSNode* node;
+	VSNode* nodeB;
 	const VSVideoInfo* vi;
 	float thresh;	// threshold above which is blur
 	int grid;
@@ -251,10 +251,9 @@ bool isBlockSharp(F2QBokehData * d,float* buf, fftwf_complex* Afreq,
 
 
 /*************************************************/
-static void VS_CC f2qbokehInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static void f2qbokehInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	F2QBokehData* d = (F2QBokehData*)*instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 	
 	d->block =  ( ( d->grid + 7) >> 3) << 3;
 		// for RGB or Y planes
@@ -280,14 +279,14 @@ static void VS_CC f2qbokehInit(VSMap* in, VSMap* out, void** instanceData, VSNod
 	//d->fftwf_free(inBuf);
 	//d->fftwf_free(outBuf);
 
-	const VSFrameRef* srcA = vsapi->getFrame(0, d->node, NULL, 0);
-	const VSFormat* fi = d->vi->format;
+	const VSFrame* srcA = vsapi->getFrame(0, d->node, NULL, 0);
+	const VSVideoFormat* fi = &d->vi->format;
 	
 	int nBytes = fi->bytesPerSample;
 	int pitch = vsapi->getStride(srcA, 0) / nBytes;
 	int gPoints = d->grid * d->grid;
 
-	d->gridLUT = (int*)vs_aligned_malloc <int>(sizeof(int) * gPoints * 5, 32);
+	d->gridLUT = (int*)vsh_aligned_malloc <int>(sizeof(int) * gPoints * 5, 32);
 	d->circleLUT = d->gridLUT + gPoints;
 
 	d->noffsets = makeRectGridLUT(d->gridLUT, pitch, d->grid);
@@ -298,8 +297,8 @@ static void VS_CC f2qbokehInit(VSMap* in, VSMap* out, void** instanceData, VSNod
 
 	if (d->noffsets != gPoints || d->count >=  4 * gPoints)
 	{
-		vs_aligned_free(d->gridLUT);
-		vsapi->setError(out, "bokeh: noffsets or count are in error");
+		vsh_aligned_free(d->gridLUT);
+		vsapi->mapSetError(out, "bokeh: noffsets or count are in error");
 		vsapi->freeNode(d->node);
 		vsapi->freeNode(d->nodeB);
 		return;
@@ -316,10 +315,9 @@ static void VS_CC f2qbokehInit(VSMap* in, VSMap* out, void** instanceData, VSNod
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef* VS_CC f2qbokehGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	F2QBokehData* d = (F2QBokehData*)*instanceData;
+static const VSFrame* VS_CC f2qbokehGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	F2QBokehData* d = (F2QBokehData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -330,23 +328,23 @@ static const VSFrameRef* VS_CC f2qbokehGetFrame(int n, int activationReason, voi
 	else if (activationReason == arAllFramesReady)
 	{
 
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat* fi = d->vi->format;
+		const VSVideoFormat* fi = &d->vi->format;
 		
 		// When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
 		// supply the "dominant" source frame to copy properties from. Frame props
 		// are an essential part of the filter chain and you should NEVER break it.
-		const VSFrameRef* blr = vsapi->getFrameFilter(n, d->nodeB, frameCtx);
-		VSFrameRef* dst = vsapi->copyFrame(blr, core);
+		const VSFrame* blr = vsapi->getFrameFilter(n, d->nodeB, frameCtx);
+		VSFrame* dst = vsapi->copyFrame(blr, core);
 
 		float* inBuf = d->inBuf; // (float*)d->fftwf_malloc(sizeof(float) * d->block * d->block);
 
 		fftwf_complex* outBuf = d->outBuf; // (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->f2size);
 
-		//int* offsets = (int*)vs_aligned_malloc<int>(sizeof(int) * d->block * d->block, 32);		
+		//int* offsets = (int*)vsh_aligned_malloc<int>(sizeof(int) * d->block * d->block, 32);		
 
 		
 		int nbytes = fi->bytesPerSample;
@@ -360,13 +358,13 @@ static const VSFrameRef* VS_CC f2qbokehGetFrame(int n, int activationReason, voi
 
 		for (int p = 0; p < 3; p++)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 			{
 
 				if (d->rgb[p] == 0) proc[2 - p] = false;
 
 			}
-			else if (fi->colorFamily == cmYUV)
+			else if (fi->colorFamily == cfYUV)
 			{
 				if (d->yuv[p] == 0) proc[p] = false;
 			}
@@ -521,8 +519,8 @@ static void VS_CC f2qbokehFree(void* instanceData, VSCore* core, const VSAPI* vs
 	vsapi->freeNode(d->node);
 	vsapi->freeNode(d->nodeB);
 
-	vs_aligned_free(d->gridLUT);
-	//vs_aligned_free(d->circleLUT); part of gridLUT creation
+	vsh_aligned_free(d->gridLUT);
+	//vsh_aligned_free(d->circleLUT); part of gridLUT creation
 	free(d);
 }
 
@@ -538,30 +536,28 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 	int err;
 	
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi) || d.vi->format->colorFamily == cmCompat
-		|| d.vi->format->colorFamily == pfRGBH || d.vi->format->colorFamily == pfYUV444PH
-		|| d.vi->format->colorFamily == pfGrayH)
+	if (!isConstantVideoFormat(d.vi) || (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16))
 	{
-		vsapi->setError(out, "f2qBokeh: clip must have constant dimensions and in YUV or RGB or Grey format. Half float formats not allowed  ");
+		vsapi->mapSetError(out, "f2qBokeh: clip must have constant dimensions and in YUV or RGB or Grey format. Half float formats not allowed  ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if ( d.vi->format-> colorFamily == cmYUV && d.vi->format->subSamplingH != 0 
-		|| d.vi->format->subSamplingW != 0)
+	if ( d.vi->format. colorFamily == cfYUV && d.vi->format.subSamplingH != 0 
+		|| d.vi->format.subSamplingW != 0)
 	{
-		vsapi->setError(out, "f2qBokeh: YUV format clip must be type YUV444 i.e. no subsampling.");
+		vsapi->mapSetError(out, "f2qBokeh: YUV format clip must be type YUV444 i.e. no subsampling.");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.nodeB = vsapi->propGetNode(in, "clipb", 0, 0);
+	d.nodeB = vsapi->mapGetNode(in, "clipb", 0, 0);
 	const VSVideoInfo* bvi = vsapi->getVideoInfo(d.nodeB);
-	if (!isSameFormat(d.vi, bvi))
+	if (!isSameVideoInfo(d.vi, bvi))
 	{
-		vsapi->setError(out, "f2qBokeh: blur clip must have identical format with the input clip  ");
+		vsapi->mapSetError(out, "f2qBokeh: blur clip must have identical format with the input clip  ");
 		vsapi->freeNode(d.node);
 		vsapi->freeNode(d.nodeB);
 		return;
@@ -575,38 +571,38 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
 
-	d.grid = int64ToIntS(vsapi->propGetInt(in, "grid", 0, &err));
+	d.grid = int64ToIntS(vsapi->mapGetInt(in, "grid", 0, &err));
 	if (err)
 	{
 		d.grid = 16;
 	}
 	else if (d.grid < 3 || d.grid > 64)
 	{
-		vsapi->setError(out, "f2qBokeh:grid must be between 3 and 64");
+		vsapi->mapSetError(out, "f2qBokeh:grid must be between 3 and 64");
 		vsapi->freeNode(d.node);
 		vsapi->freeNode(d.nodeB);
 		return;
 	}
-	d.thresh = (float)vsapi->propGetFloat(in, "thresh", 0, &err);
+	d.thresh = (float)vsapi->mapGetFloat(in, "thresh", 0, &err);
 	if (err)
 	{
 		d.thresh = 0.45f;
 	}
 	else if (d.thresh < 0.0f || d.thresh > 1.0f)
 	{
-		vsapi->setError(out, "f2qBokeh:value of thresh must be between 0 qnd 1.0");
+		vsapi->mapSetError(out, "f2qBokeh:value of thresh must be between 0 qnd 1.0");
 		vsapi->freeNode(d.node);
 		vsapi->freeNode(d.nodeB);
 		return;
 	}
 
 
-	if (d.vi->format->colorFamily == cmRGB)
+	if (d.vi->format.colorFamily == cfRGB)
 	{
-		int count = vsapi->propNumElements(in, "rgb");
+		int count = vsapi->mapNumElements(in, "rgb");
 		if (count > 3)
 		{
-			vsapi->setError(out, "f2qBokeh: rgb array cannot have more than 3 entries.");
+			vsapi->mapSetError(out, "f2qBokeh: rgb array cannot have more than 3 entries.");
 			vsapi->freeNode(d.node);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -620,16 +616,18 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 
 		for (int p = 0; p < 3; p++)
 		{
-			d.rgb[p] = int64ToIntS(vsapi->propGetInt(in, "rgb", p, &err));
+			int rgbDefault = d.rgb[p];
+			d.rgb[p] = int64ToIntS(vsapi->mapGetInt(in, "rgb", p, &err));
 
-			 if (err)
+			if (err)
 			{
-				d.rgb[p] = d.rgb[p - 1];
+				// not given: repeat the previous value, or keep the default for the first one
+				d.rgb[p] = p > 0 ? d.rgb[p - 1] : rgbDefault;
 			}
 
 			else if (d.rgb[p] < 0 || d.rgb[p] > 1)
 			{
-				vsapi->setError(out, "f2qBokeh: rgb array can have values of 0 or 1 only.");
+				vsapi->mapSetError(out, "f2qBokeh: rgb array can have values of 0 or 1 only.");
 				vsapi->freeNode(d.node);
 				vsapi->freeNode(d.nodeB);
 				return;
@@ -638,18 +636,18 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 		}
 		if (d.rgb[0] == 0 && d.rgb[1] == 0 && d.rgb[2] == 0)
 		{
-			vsapi->setError(out, "f2qBokeh: rgb array all values should not be 0");
+			vsapi->mapSetError(out, "f2qBokeh: rgb array all values should not be 0");
 			vsapi->freeNode(d.node);
 			vsapi->freeNode(d.nodeB);
 			return;
 		}
 	}
-	else if (d.vi->format->colorFamily == cmYUV)
+	else if (d.vi->format.colorFamily == cfYUV)
 	{
-		int count = vsapi->propNumElements(in, "yuv");
+		int count = vsapi->mapNumElements(in, "yuv");
 		if (count > 3)
 		{
-			vsapi->setError(out, "f2qBokeh: yuv array cannot have more than 3 entries.");
+			vsapi->mapSetError(out, "f2qBokeh: yuv array cannot have more than 3 entries.");
 			vsapi->freeNode(d.node);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -662,16 +660,18 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 		}
 		for (int p = 0; p < 3; p++)
 		{
-			d.yuv[p] = int64ToIntS(vsapi->propGetInt(in, "yuv", p, &err));
+			int yuvDefault = d.yuv[p];
+			d.yuv[p] = int64ToIntS(vsapi->mapGetInt(in, "yuv", p, &err));
 
 			if (err)
 			{
-				d.yuv[p] = d.yuv[p - 1];
+				// not given: repeat the previous value, or keep the default for the first one
+				d.yuv[p] = p > 0 ? d.yuv[p - 1] : yuvDefault;
 			}
 
 			else if (d.yuv[p] < 0 || d.yuv[p] > 1)
 			{
-				vsapi->setError(out, "f2qBokeh: yuv array can have values of 0 or 1 only.");
+				vsapi->mapSetError(out, "f2qBokeh: yuv array can have values of 0 or 1 only.");
 				vsapi->freeNode(d.node);
 				vsapi->freeNode(d.nodeB);
 				return;
@@ -680,7 +680,7 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 		}
 		if (d.yuv[0] == 0 && d.yuv[1] == 0 && d.yuv[2] == 0)
 		{
-			vsapi->setError(out, "f2qBokeh: yuv array all values should not be 0");
+			vsapi->mapSetError(out, "f2qBokeh: yuv array all values should not be 0");
 			vsapi->freeNode(d.node);
 			vsapi->freeNode(d.nodeB);
 			return;
@@ -702,13 +702,25 @@ static void VS_CC f2qbokehCreate(const VSMap* in, VSMap* out, void* userData, VS
 	// need to modify no shared data at all when the filter is running.
 	// For more complicated filters, fmParallelRequests is usually easier to achieve as it can
 	// be prefetched in parallel but the actual processing is serialized.
-	// The others can be considered special cases where fmSerial is useful to source filters and
+	// The others can be considered special cases where fmFrameState is useful to source filters and
 	// fmUnordered is useful when a filter's state may change even when deciding which frames to
 	// prefetch (such as a cache filter).
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
 
-	vsapi->createFilter(in, out, "f2qBokeh", f2qbokehInit, f2qbokehGetFrame, f2qbokehFree, fmParallel, 0, data, core);
+	f2qbokehInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[2];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	if (data->nodeB != NULL)
+		deps[ndeps++] = { data->nodeB, rpGeneral };
+	vsapi->createVideoFilter(out, "f2qBokeh", data->vi, f2qbokehGetFrame, f2qbokehFree, fmParallel, deps, ndeps, data, core);
 
 }
 /*

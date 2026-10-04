@@ -30,7 +30,7 @@ MBlur filter plugin for vapoursynth by V.C.Mohan
 //----------------------------
 typedef struct 
 {
-    VSNodeRef *node;
+    VSNode *node;
     const VSVideoInfo *vi;
 	int type;	// 1 linear, 2 rectangular, 3.circular 
     int x, y;	
@@ -197,10 +197,9 @@ int makeLinearLUT(int* offsets, int pitch, int xcoord, int ycoord)
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC mblurInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void mblurInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     MBlurData *d = (MBlurData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 	int xcoord = d->x, ycoord = d->y, npoints;
 	
 	if (d->type == 1)	// linear
@@ -241,10 +240,9 @@ static void VS_CC mblurInit(VSMap *in, VSMap *out, void **instanceData, VSNode *
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void **instanceData, 
-					void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    MBlurData *d = (MBlurData *) * instanceData;
+static const VSFrame *VS_CC mblurGetFrame(int n, int activationReason, void *instanceData, 
+					void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    MBlurData *d = (MBlurData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -253,17 +251,17 @@ static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void *
     } 
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 		int nbytes = fi->bytesPerSample;
-        VSFrameRef *dst = vsapi->copyFrame(src, core);
+        VSFrame *dst = vsapi->copyFrame(src, core);
 
-		int * offset = (int *)vs_aligned_malloc<int>(sizeof(int) * d->npoints, 32);
+		int * offset = (int *)vsh_aligned_malloc<int>(sizeof(int) * d->npoints, 32);
 		
 		int subH = fi->subSamplingH;
 		int subW = fi->subSamplingW;
@@ -288,7 +286,7 @@ static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void *
 					count = makeLinearLUT(offset, pitch, d->x, d->y);
 				else if (plane == 1)
 				{
-					if (fi->colorFamily == cmYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
+					if (fi->colorFamily == cfYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
 						count = makeLinearLUT(offset, pitch, d->x >> subW, d->y >> subH);
 				}
 			}
@@ -299,7 +297,7 @@ static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void *
 					count = makeRectGridLUT(offset, pitch, d->x, d->y);
 				else if (plane == 1)
 				{
-					if (fi->colorFamily == cmYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
+					if (fi->colorFamily == cfYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
 						count = makeRectGridLUT(offset, pitch, d->x >> subW, d->y >> subH);
 				}
 			}
@@ -310,7 +308,7 @@ static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void *
 					count = makeCircularLUT(offset, pitch, d->x);
 				else if (plane == 1)
 				{
-					if (fi->colorFamily == cmYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
+					if (fi->colorFamily == cfYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
 						count = makeCircularLUTUV(offset, pitch, d->x, subW, subH);
 				}
 			}
@@ -370,7 +368,7 @@ static const VSFrameRef *VS_CC mblurGetFrame(int n, int activationReason, void *
 			}			
 		}
 		vsapi->freeFrame(src);
-		vs_aligned_free(offset);
+		vsh_aligned_free(offset);
 		return dst;
 			
 	}	// all frames ready
@@ -395,21 +393,21 @@ static void VS_CC mblurCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     int err;
 	
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "mBlur: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "mBlur: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "mBlur: Half float formats not allowed ");
+		vsapi->mapSetError(out, "mBlur: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.type = vsapi->propGetInt(in, "type", 0, &err);
+	d.type = vsapi->mapGetInt(in, "type", 0, &err);
 	if (err)
 	{
 		d.type = 1;
@@ -418,13 +416,13 @@ static void VS_CC mblurCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 	{
 		if (d.type < 1 || d.type > 3 )
 		{
-			vsapi->setError(out, "mBlur: Type value may be either 1 for linear, or  2 for rectangular or 3 for circular focal blur only");
+			vsapi->mapSetError(out, "mBlur: Type value may be either 1 for linear, or  2 for rectangular or 3 for circular focal blur only");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	d.x = vsapi->propGetInt(in, "x", 0, &err);
+	d.x = vsapi->mapGetInt(in, "x", 0, &err);
 
 	if (err)
 	{
@@ -434,12 +432,12 @@ static void VS_CC mblurCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 	{
 		if (abs (d.x) > 100)
 		{
-			vsapi->setError(out, "mBlur: x must be -100 to 100");
+			vsapi->mapSetError(out, "mBlur: x must be -100 to 100");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
-	d.y = vsapi->propGetInt(in, "y", 0, &err);
+	d.y = vsapi->mapGetInt(in, "y", 0, &err);
 
 	if (err)
 	{
@@ -449,7 +447,7 @@ static void VS_CC mblurCreate(const VSMap *in, VSMap *out, void *userData, VSCor
 	{
 		if (abs (d.y) > 100 || (d.x == 0 && d.y == 0) )
 		{
-			vsapi->setError(out, "mBlur: y must be -100 to 100. Both x and y should not be zero");
+			vsapi->mapSetError(out, "mBlur: y must be -100 to 100. Both x and y should not be zero");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -463,7 +461,17 @@ static void VS_CC mblurCreate(const VSMap *in, VSMap *out, void *userData, VSCor
    
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "mBlur", mblurInit, mblurGetFrame, mblurFree, fmParallel, 0, data, core);
+    mblurInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "mBlur", data->vi, mblurGetFrame, mblurFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

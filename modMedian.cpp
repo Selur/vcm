@@ -130,7 +130,7 @@ void AdMed ( const finc *fp, finc  *wp, const int pitch,
 {
 	finc tolr = (finc)(max * 0.005f);
 
-	finc* tbuf = (finc*)vs_aligned_malloc( sizeof(finc) * maxgrid * maxgrid , 32);
+	finc* tbuf = (finc*)vsh_aligned_malloc( sizeof(finc) * maxgrid * maxgrid , 32);
 
 	int gsize = mingrid;// will be increased if required as adaptation
 	
@@ -193,13 +193,13 @@ void AdMed ( const finc *fp, finc  *wp, const int pitch,
 		}	// for int w =
 
 	}	//for h=
-	vs_aligned_free(tbuf);
+	vsh_aligned_free(tbuf);
 }
 
 //---------------------------------------------------------------------------------------------
 
 typedef struct {
-				VSNodeRef *node;
+				VSNode *node;
 				const VSVideoInfo *vi;
 				int maxgrid;
 				int yy; 
@@ -213,17 +213,14 @@ typedef struct {
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC adaptivemedianInit
-				(VSMap *in, VSMap *out, void **instanceData, 
-				VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void adaptivemedianInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     AdaptiveMedianData *d = (AdaptiveMedianData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
-	d->LUT = (int*)vs_aligned_malloc<int>(sizeof(int) * d->maxgrid * d->maxgrid, 32);
-	const VSFormat* fi = d->vi->format;
+	d->LUT = (int*)vsh_aligned_malloc<int>(sizeof(int) * d->maxgrid * d->maxgrid, 32);
+	const VSVideoFormat* fi = &d->vi->format;
 	int nbytes = fi->bytesPerSample;	
 	
-	const VSFrameRef* src = vsapi->getFrame(0, d->node, NULL, 0);
+	const VSFrame* src = vsapi->getFrame(0, d->node, NULL, 0);
 	
 	const int pitch = vsapi->getStride(src, 0) / nbytes;
 	
@@ -240,7 +237,7 @@ static void VS_CC adaptivemedianInit
 		else
 		{
 			const int uvpitch = vsapi->getStride(src, 1) / nbytes;
-			d->uvLUT = (int*)vs_aligned_malloc<int>(sizeof(int) * d->maxgrid * d->maxgrid, 32);
+			d->uvLUT = (int*)vsh_aligned_malloc<int>(sizeof(int) * d->maxgrid * d->maxgrid, 32);
 			d->uvbuf = true;
 
 			int count = createOffsetLUT(d->uvLUT, uvpitch, 1, d->maxgrid);
@@ -258,12 +255,11 @@ static void VS_CC adaptivemedianInit
 // upstream filters.
 // Once all frames are ready the the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC adaptivemedianGetFrame
-				(int n, int activationReason, void **instanceData, 
+static const VSFrame *VS_CC adaptivemedianGetFrame
+				(int n, int activationReason, void *instanceData, 
 				void **frameData, VSFrameContext *frameCtx, 
-				VSCore *core, const VSAPI *vsapi)
-{
-    AdaptiveMedianData *d = (AdaptiveMedianData *) * instanceData;
+				VSCore *core, const VSAPI *vsapi) {
+    AdaptiveMedianData *d = (AdaptiveMedianData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -272,19 +268,19 @@ static const VSFrameRef *VS_CC adaptivemedianGetFrame
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
-		int opt = fi ->colorFamily == cmRGB? 7 :  (((d->vv << 2) |  d->uu) << 1) | d->yy; 
+		int opt = fi ->colorFamily == cfRGB? 7 :  (((d->vv << 2) |  d->uu) << 1) | d->yy; 
 		
         // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
         // supply the "dominant" source frame to copy properties from. Frame props
         // are an essential part of the filter chain and you should NEVER break it.
-        VSFrameRef *dst = vsapi->copyFrame( src, core);
+        VSFrame *dst = vsapi->copyFrame( src, core);
 
         // It's processing loop time!
         // Loop over all the planes
@@ -312,7 +308,7 @@ static const VSFrameRef *VS_CC adaptivemedianGetFrame
 
 					if(((opt >> plane) && 1) == 1  )
 					{
-						if ( plane == 0 || fi->colorFamily == cmRGB)
+						if ( plane == 0 || fi->colorFamily == cfRGB)
 							AdMed ( srcp, dstp, pitch, bwd, bht, mingrid, d->maxgrid, d->LUT, min, max);
 						else
 							AdMed(srcp, dstp, pitch, bwd, bht, mingrid, d->maxgrid, d->uvLUT, min, max);
@@ -333,7 +329,7 @@ static const VSFrameRef *VS_CC adaptivemedianGetFrame
 					int mingrid = 3;
 					if (((opt >> plane) && 1) == 1)
 					{
-						if (plane == 0 || fi->colorFamily == cmRGB)
+						if (plane == 0 || fi->colorFamily == cfRGB)
 							AdMed(sp, dp, pitch, bwd, bht, mingrid, d->maxgrid, d->LUT, min, max);
 						else
 							AdMed(sp, dp, pitch, bwd, bht, mingrid, d->maxgrid, d->uvLUT, min, max);
@@ -353,7 +349,7 @@ static const VSFrameRef *VS_CC adaptivemedianGetFrame
 				int mingrid = 3;
 				if (((opt >> plane) && 1) == 1)
 				{
-					if (plane == 0 || fi->colorFamily == cmRGB)
+					if (plane == 0 || fi->colorFamily == cfRGB)
 						AdMed(sp, dp, pitch, bwd, bht, mingrid, d->maxgrid, d->LUT, min, max);
 					else
 						AdMed(sp, dp, pitch, bwd, bht, mingrid, d->maxgrid, d->uvLUT, min, max);
@@ -381,9 +377,9 @@ static void VS_CC adaptivemedianFree(void *instanceData, VSCore *core, const VSA
 {
     AdaptiveMedianData *d = (AdaptiveMedianData *)instanceData;
     vsapi->freeNode(d->node);
-	vs_aligned_free(d->LUT);
+	vsh_aligned_free(d->LUT);
 	if (d->uvbuf)
-		vs_aligned_free(d->uvLUT);
+		vsh_aligned_free(d->uvLUT);
 
     free(d);
 }
@@ -399,18 +395,18 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
     int err;
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "Median: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "Median: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Median: Half float formats not allowed ");
+		vsapi->mapSetError(out, "Median: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -422,7 +418,7 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
     // this could fail is when the value wasn't set by the user.
     // And when it's not set we want it to default to enabled.
     
-	d.maxgrid = int64ToIntS(vsapi->propGetInt(in, "maxgrid", 0, &err));
+	d.maxgrid = int64ToIntS(vsapi->mapGetInt(in, "maxgrid", 0, &err));
 
     if (err)
         d.maxgrid = 5;
@@ -430,18 +426,18 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
     // the only allowed values are 3 to 9 odd numbers...
     if (d.maxgrid < 3 || d.maxgrid > 11 || (d.maxgrid & 1) == 0) 
 	{
-        vsapi->setError(out, "Median: maxgrid value can be odd number 3 to 11 only");
+        vsapi->mapSetError(out, "Median: maxgrid value can be odd number 3 to 11 only");
         vsapi->freeNode(d.node);
         return;
     }
 
 	
 	temp = 0;
-	temp = vsapi->propNumElements(in, "plane");
+	temp = vsapi->mapNumElements(in, "plane");
 	if (temp <= 0)
 	{
 		d.yy = 1;
-		if (d.vi->format->colorFamily == cmYUV)
+		if (d.vi->format.colorFamily == cfYUV)
 		{
 			d.uu = 0;
 			d.vv = 0;
@@ -454,7 +450,7 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
 	}
 	else if (temp < 3)
 	{
-		vsapi->setError(out, "Median: values of each of 3 planes as one or zero must be specified");
+		vsapi->mapSetError(out, "Median: values of each of 3 planes as one or zero must be specified");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -462,25 +458,25 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
 	{
 		for (int i = 0; i < 3; i++)
 		{
-			if (int64ToIntS(vsapi->propGetInt(in, "plane", i, 0)) < 0
-				|| int64ToIntS(vsapi->propGetInt(in, "plane", i, 0)) > 1)
+			if (int64ToIntS(vsapi->mapGetInt(in, "plane", i, 0)) < 0
+				|| int64ToIntS(vsapi->mapGetInt(in, "plane", i, 0)) > 1)
 			{
-				vsapi->setError(out, "Median:  value of each of 3 planes as one or zero must be specified");
+				vsapi->mapSetError(out, "Median:  value of each of 3 planes as one or zero must be specified");
 				vsapi->freeNode(d.node);
 				return;
 			}
 		}
 
 
-		d.yy = int64ToIntS(vsapi->propGetInt(in, "plane", 0, 0));
-		d.uu = int64ToIntS(vsapi->propGetInt(in, "plane", 1, 0));
-		d.vv = int64ToIntS(vsapi->propGetInt(in, "plane", 2, 0));
+		d.yy = int64ToIntS(vsapi->mapGetInt(in, "plane", 0, 0));
+		d.uu = int64ToIntS(vsapi->mapGetInt(in, "plane", 1, 0));
+		d.vv = int64ToIntS(vsapi->mapGetInt(in, "plane", 2, 0));
 	}
 
 
 	if (d.yy == 0 && d.uu == 0 && d.vv == 0)
 	{
-		vsapi->setError(out, "Median: At least one of plane must be set to 1 ");
+		vsapi->mapSetError(out, "Median: At least one of plane must be set to 1 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -501,14 +497,22 @@ static void VS_CC adaptivemedianCreate(const VSMap *in,
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters fmParallelRequests is usually easier to achieve as an
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If you filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "Median", adaptivemedianInit, 
-								adaptivemedianGetFrame, adaptivemedianFree, 
-								fmParallel, 0, data, core);
+    adaptivemedianInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "Median", data->vi, adaptivemedianGetFrame, adaptivemedianFree, fmParallel, deps, ndeps, data, core);
     return;
 }
 

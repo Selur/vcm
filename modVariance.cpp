@@ -36,7 +36,7 @@ Computes the global variance  in the window of frame or clip,  in each grid of s
 #include "VSHelper.h"
 */
 typedef struct {
-		VSNodeRef *node;
+		VSNode *node;
 		const VSVideoInfo *vi;	
 		int xgrid, ygrid;		// size of grid x and to be used. Must be submultiples of frame width and height
 		bool UV;
@@ -102,23 +102,22 @@ float	getVarSq( const finc * sp, int pitch, int lx, int wd,
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC varianceInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void varianceInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     VarianceData *d = (VarianceData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 
 	
 		// get variance for use in entire clip
-		const VSFrameRef *src = vsapi->getFrame(d->fn, d->node,0,0);
+		const VSFrame *src = vsapi->getFrame(d->fn, d->node,0,0);
 
-		const VSFormat *fi = d->vi->format;
+		const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 		int nb = fi->bitsPerSample;
 		int kb = fi->bytesPerSample;
 		int subW[] = {0, fi->subSamplingW, fi->subSamplingW};
 		int subH[] = {0, fi->subSamplingH, fi->subSamplingH};
-		if (fi->colorFamily == cmRGB)
+		if (fi->colorFamily == cfRGB)
 		{
 			
 			d->ty = height  - d->ty - d->ht;
@@ -133,7 +132,7 @@ static void VS_CC varianceInit(VSMap *in, VSMap *out, void **instanceData, VSNod
             int wd = vsapi->getFrameWidth(src, plane);
 			int pitch = src_stride / kb;
 
-			if(plane == 0 || (fi->colorFamily == cmYUV && d->UV) || fi->colorFamily == cmRGB )
+			if(plane == 0 || (fi->colorFamily == cfYUV && d->UV) || fi->colorFamily == cfRGB )
 			{
 
 				// getMeanVal( const finc * sp, int pitch, int lx, int rx, int ty, int by );
@@ -215,9 +214,8 @@ void varianceGrid(finc * dp, const finc * sp, int pitch, float gvarsq,
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC varianceGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-    VarianceData *d = (VarianceData *) * instanceData;
+static const VSFrame *VS_CC varianceGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    VarianceData *d = (VarianceData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -226,14 +224,14 @@ static const VSFrameRef *VS_CC varianceGetFrame(int n, int activationReason, voi
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
-		VSFrameRef *dst = vsapi->copyFrame( src, core);		
+		VSFrame *dst = vsapi->copyFrame( src, core);		
 		int nb = fi->bitsPerSample;
 		int kb = fi->bytesPerSample;
         // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
@@ -258,7 +256,7 @@ static const VSFrameRef *VS_CC varianceGetFrame(int n, int activationReason, voi
 			if( fi->sampleType == stInteger)
 			{
 
-				 if( d->gvarsq[p] < 1 || (fi->colorFamily == cmYUV && ! d->UV) )
+				 if( d->gvarsq[p] < 1 || (fi->colorFamily == cfYUV && ! d->UV) )
 				// gvarsq = 0 means no noise. UV process not opted
 					continue;
 				if ( nb == 8)
@@ -311,90 +309,90 @@ static void VS_CC varianceCreate(const VSMap *in, VSMap *out, void *userData, VS
 	int temp;
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isConstantFormat(d.vi) || d.vi->format->colorFamily == cmCompat ) 
+    if (!isConstantVideoFormat(d.vi)) 
 	{
-        vsapi->setError(out, "variance: input clip of only constant and other than Compat format allowed");
+        vsapi->mapSetError(out, "variance: input clip of only constant and other than Compat format allowed");
         vsapi->freeNode(d.node);
         return;
     }
-	d.lx = vsapi->propGetInt(in, "lx", 0, 0);
-	d.ty = vsapi->propGetInt(in, "ty", 0, 0);
-	d.wd = vsapi->propGetInt(in, "wd", 0, 0);
-	d.ht = vsapi->propGetInt(in, "ht", 0, 0);
+	d.lx = vsapi->mapGetInt(in, "lx", 0, 0);
+	d.ty = vsapi->mapGetInt(in, "ty", 0, 0);
+	d.wd = vsapi->mapGetInt(in, "wd", 0, 0);
+	d.ht = vsapi->mapGetInt(in, "ht", 0, 0);
 
 	if(d.lx < 0 || d.lx >= d.vi->width)
 	{
-        vsapi->setError(out, "variance: lx is out of frame");
+        vsapi->mapSetError(out, "variance: lx is out of frame");
         vsapi->freeNode(d.node);
         return;
     }
 	if(d.wd <= 0 || d.lx + d.wd >= d.vi->width)
 	{
-        vsapi->setError(out, "variance: invalid wd. wd must be +ve number and lx + wd must be in frame");
+        vsapi->mapSetError(out, "variance: invalid wd. wd must be +ve number and lx + wd must be in frame");
         vsapi->freeNode(d.node);
         return;
     }
 	if(d.ty < 0 || d.ty >= d.vi->height)
 	{
-        vsapi->setError(out, "variance: ty is out of frame");
+        vsapi->mapSetError(out, "variance: ty is out of frame");
         vsapi->freeNode(d.node);
         return;
     }
 	if(d.ht <= 0 || d.ty + d.ht >= d.vi->height)
 	{
-        vsapi->setError(out, "variance: invalid ht. ht must be +ve number and ty + ht must be in frame");
+        vsapi->mapSetError(out, "variance: invalid ht. ht must be +ve number and ty + ht must be in frame");
         vsapi->freeNode(d.node);
         return;
     }
-	d.fn = vsapi->propGetInt(in, "fn", 0, &err);
+	d.fn = vsapi->mapGetInt(in, "fn", 0, &err);
 	if (err)
 		d.fn = 0;
 	else
 	{
 		if (d.fn < 0 || d.fn >= d.vi->numFrames)
 		{
-			vsapi->setError(out, "variance: invalid fn. Not within clip");
+			vsapi->mapSetError(out, "variance: invalid fn. Not within clip");
 			vsapi->freeNode(d.node);
 			return;
 		}
     }
-	d.xgrid = vsapi->propGetInt(in, "xgrid", 0, &err);
+	d.xgrid = vsapi->mapGetInt(in, "xgrid", 0, &err);
 	if (err)
 		d.xgrid = 5;
 	else
 	{
 		if (d.xgrid < 3 || d.xgrid >=  d.vi->width)
 		{
-			vsapi->setError(out, "variance: invalid xgrid. value must be 3 to width of frame");
+			vsapi->mapSetError(out, "variance: invalid xgrid. value must be 3 to width of frame");
 			vsapi->freeNode(d.node);
 			return;
 		}
     }
-	d.ygrid = vsapi->propGetInt(in, "ygrid", 0, &err);
+	d.ygrid = vsapi->mapGetInt(in, "ygrid", 0, &err);
 	if (err)
 		d.ygrid = 5;
 	else
 	{
 		if (d.ygrid < 3 || d.ygrid >=  d.vi->height)
 		{
-			vsapi->setError(out, "variance: invalid ygrid. value must be 3 to height of frame");
+			vsapi->mapSetError(out, "variance: invalid ygrid. value must be 3 to height of frame");
 			vsapi->freeNode(d.node);
 			return;
 		}
     }
-	temp = !!vsapi->propGetInt(in, "uv", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "uv", 0, &err);
     if (err)
         d.UV = true;
 	else
 	{
 		if (temp < 0 || temp >  1)
 		{
-			vsapi->setError(out, "variance: invalid uv. value must be 0 or 1");
+			vsapi->mapSetError(out, "variance: invalid uv. value must be 0 or 1");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -415,12 +413,22 @@ static void VS_CC varianceCreate(const VSMap *in, VSMap *out, void *userData, VS
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "variance", varianceInit, varianceGetFrame, varianceFree, fmParallel, 0, data, core);
+    varianceInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "variance", data->vi, varianceGetFrame, varianceFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

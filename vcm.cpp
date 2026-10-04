@@ -48,9 +48,16 @@ This program is free software: you can redistribute it and/or modify
 #include <stack>		
 #include <functional>
 
+#include <mutex>
+
 #include "WSSegment.cpp"
-#include "VapourSynth.h"
-#include "VSHelper.h"
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
+using namespace vsh;
+
+// fftwf planning, allocation and plan destruction are not thread safe,
+// so the frequency domain filters serialize them with this mutex.
+static std::mutex g_mutex;
 #include "modHistogramHelper.cpp"
 #include <ctime>
 
@@ -112,51 +119,40 @@ This program is free software: you can redistribute it and/or modify
 #include "StepFilter.cpp"
 
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin)
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi)
 {
-    configFunc("in.vcmohan.cm", "vcm", "VapourSynth Plugin by vcmohan ", VAPOURSYNTH_API_VERSION, 1, plugin);	
+	vspapi->configPlugin("in.vcmohan.cm", "vcm", "VapourSynth Plugin by vcmohan", VS_MAKE_VERSION(VCM_VERSION_MAJOR, VCM_VERSION_MINOR), VAPOURSYNTH_API_VERSION, 0, plugin);
 
-	registerFunc("Amp", "clip:clip;useclip:int:opt;sclip:clip:opt;connect4:int:opt;sh:int[]:opt;sm:int[]:opt;", amplitudeCreate, 0, plugin);
-	registerFunc("Fan", "clip:clip;span:int:opt;edge:int:opt;plus:int:opt;minus:int:opt;uv:int:opt;", fanCreate, 0, plugin); 
-	registerFunc("Hist", "clip:clip;clipm:clip:opt;type:int:opt;table:int[]:opt;mf:int:opt;window:int:opt;limit:int:opt", histogramadjustCreate, 0, plugin);
-	registerFunc("Median", "clip:clip;maxgrid:int:opt;plane:int[]:opt;", adaptivemedianCreate, 0, plugin);
-	registerFunc("GBlur", "clip:clip;ksize:int:opt;sd:float:opt;", gblurCreate, 0, plugin);
-	registerFunc("MBlur", "clip:clip;type:int:opt;x:int:opt;y:int:opt;", mblurCreate, 0, plugin);
-	registerFunc("Neural", "clip:clip;txt:data:opt;fname:data:opt;tclip:clip:opt;xpts:int:opt;ypts:int:opt;tlx:int:opt;tty:int:opt;trx:int:opt;tby:int:opt;iter:int:opt;"
-							"bestof:int:opt;wset:int:opt;rgb:int:opt;", neuralCreate, 0, plugin);
-	registerFunc("Variance", "clip:clip;lx:int;wd:int;ty:int;ht:int;fn:int:opt;uv:int:opt;xgrid:int:opt;ygrid:int:opt;", varianceCreate, 0, plugin);
-	registerFunc("SaltPepper", "clip:clip;planes:int[]:opt;tol:int:opt;avg:int:opt", saltpepperCreate, 0, plugin);
-	registerFunc("Veed", "clip:clip;str:int:opt;rad:int:opt;planes:int[]:opt;plimit:int[]:opt;mlimit:int[]:opt;", veedCreate, 0, plugin);
-	registerFunc("Mean", "clip:clip;grid:int:opt;tol:float:opt;", meanCreate, 0, plugin);
-
-	registerFunc("F1Quiver", "clip:clip;filter:int[];morph:int:opt;custom:int:opt;test:int:opt;strow:int:opt;nrows:int:opt;gamma:float:opt;", f1quiverCreate, 0, plugin);
-	registerFunc("F1QClean", "clip:clip;span:int:opt;fromf:int:opt;upto:int:opt;", f1qcleanCreate, 0, plugin);
-	registerFunc("F1QLimit", "clip:clip;span:int:opt;limit:int:opt;freqs:int[]:opt;", f1qlimitCreate, 0, plugin);
-	registerFunc("F2Quiver", "clip:clip;frad:int:opt;ham:int:opt;test:int:opt;morph:int:opt;gamma:float:opt;fspec:int[]:opt;", f2quiverCreate, 0, plugin);
-	registerFunc("F2QLimit", "clip:clip;grid:int:opt;inner:int:opt;warn:int:opt;fspec:int[]:opt;", f2qlimitCreate, 0, plugin);
-	registerFunc("F2QBlur", "clip:clip;line:int:opt;x:int:opt;y:int:opt;", f2qblurCreate, 0, plugin);
-	registerFunc("F2QSharp", "clip:clip;line:int:opt;wn:float:opt;x:int:opt;y:int:opt;frad:int:opt;ham:int:opt;;scale:float:opt;rgb:int[]:opt;yuv:int[]:opt", f2qsharpCreate, 0, plugin);
-	registerFunc("F2QCorr", "clip:clip;bclip:clip;cx:int:opt;cy:int:opt;txt:int:opt;filename:data:opt;sf:int:opt;ef:int:opt;every:int:opt;", f2qcorrCreate, 0, plugin);
-	registerFunc("F2QBokeh", "clip:clip;clipb:clip;grid:int:opt;thresh:float:opt;rgb:int[]:opt;yuv:int[]:opt;", f2qbokehCreate, 0, plugin);
-
-	registerFunc("Rotate", "clip:clip;bkg:clip;angle:float;dinc:float:opt;lx:int:opt;wd:int:opt;ty:int:opt;ht:int:opt;"
-							"axx:int:opt;axy:int:opt;intq:int:opt;", rotateCreate, 0, plugin);
-	registerFunc("DeBarrel", "clip:clip;abc:float[];method:int:opt;pin:int:opt;q:int:opt;test:int:opt;dots:data:opt;dim:float:opt;", debarrelCreate, 0, plugin);
-	
-	registerFunc("Reform", "clip:clip;bkg:clip;intq:int:opt;norm:int:opt;rect:float[]:opt;quad:float[]:opt;q2r:int:opt;", reformCreate, 0, plugin);
-	
-	registerFunc("Fisheye", "clip:clip;method:int:opt;xo:int:opt;yo:int:opt;frad:int:opt;sqr:int:opt;"
-		"rix:float:opt;fov:float:opt;test:int:opt;dim:float:opt;q:int:opt;dots:int:opt;", fisheyeCreate, 0, plugin);
-	
-
-	registerFunc("ColorBox", "format:int:opt;luma:int:opt;nbw:int:opt;nbh:int:opt", colorBoxCreate, 0, plugin);
-	registerFunc("Grid", "clip:clip;lineint:int:opt;bold:int:opt;vbold:int:opt;color:int[]:opt;bcolor:int[]:opt;vbcolor:int[]:opt;style:int:opt;", gridCreate, 0, plugin);
-	registerFunc("Pattern", "clip:clip;type:int:opt;orient:int:opt;spk:int:opt;spike:float:opt;wl:int:opt;x:int:opt;y:int:opt;rad:int:opt;stat:int:opt;overlay:float:opt;bgr:int[]:opt;", patternCreate, 0, plugin);
-	registerFunc("Jitter", "clip:clip;type:int:opt;jmax:int:opt;dense:data:opt;wl:int:opt;stat:int:opt;speed:data:opt;", jitterCreate, 0, plugin);
-	registerFunc("DeJitter", "clip:clip;jmax:int:opt;wsyn:int:opt;thresh:float:opt;", dejitterCreate, 0, plugin);
-	registerFunc("Bokeh", "clip:clip;clipb:clip;grid:int:opt;thresh:float:opt;rgb:int[]:opt;yuv:int[]:opt;", bokehCreate, 0, plugin);
-	registerFunc("StepFilter", "clip:clip;add:int:opt;boost:float:opt;"
-		"segmenthor:int:opt;segmentvert:int:opt;limit:int:opt;", stepfilterCreate, 0, plugin);
-	registerFunc("Circles", "clip:clip;xo:int:opt;yo:int:opt;frad:int:opt;cint:int:opt;dots:int:opt;rgb:int[]:opt;dim:float:opt;", circlesCreate, 0, plugin);
-
+	vspapi->registerFunction("Amp", "clip:vnode;useclip:int:opt;sclip:vnode:opt;connect4:int:opt;sh:int[]:opt;sm:int[]:opt;", "clip:vnode;", amplitudeCreate, NULL, plugin);
+	vspapi->registerFunction("Fan", "clip:vnode;span:int:opt;edge:int:opt;plus:int:opt;minus:int:opt;uv:int:opt;", "clip:vnode;", fanCreate, NULL, plugin);
+	vspapi->registerFunction("Hist", "clip:vnode;clipm:vnode:opt;type:int:opt;table:int[]:opt;mf:int:opt;window:int:opt;limit:int:opt;", "clip:vnode;", histogramadjustCreate, NULL, plugin);
+	vspapi->registerFunction("Median", "clip:vnode;maxgrid:int:opt;plane:int[]:opt;", "clip:vnode;", adaptivemedianCreate, NULL, plugin);
+	vspapi->registerFunction("GBlur", "clip:vnode;ksize:int:opt;sd:float:opt;", "clip:vnode;", gblurCreate, NULL, plugin);
+	vspapi->registerFunction("MBlur", "clip:vnode;type:int:opt;x:int:opt;y:int:opt;", "clip:vnode;", mblurCreate, NULL, plugin);
+	vspapi->registerFunction("Neural", "clip:vnode;txt:data:opt;fname:data:opt;tclip:vnode:opt;xpts:int:opt;ypts:int:opt;tlx:int:opt;tty:int:opt;trx:int:opt;tby:int:opt;iter:int:opt;bestof:int:opt;wset:int:opt;rgb:int:opt;", "clip:vnode;", neuralCreate, NULL, plugin);
+	vspapi->registerFunction("Variance", "clip:vnode;lx:int;wd:int;ty:int;ht:int;fn:int:opt;uv:int:opt;xgrid:int:opt;ygrid:int:opt;", "clip:vnode;", varianceCreate, NULL, plugin);
+	vspapi->registerFunction("SaltPepper", "clip:vnode;planes:int[]:opt;tol:int:opt;avg:int:opt;", "clip:vnode;", saltpepperCreate, NULL, plugin);
+	vspapi->registerFunction("Veed", "clip:vnode;str:int:opt;rad:int:opt;planes:int[]:opt;plimit:int[]:opt;mlimit:int[]:opt;", "clip:vnode;", veedCreate, NULL, plugin);
+	vspapi->registerFunction("Mean", "clip:vnode;grid:int:opt;tol:float:opt;", "clip:vnode;", meanCreate, NULL, plugin);
+	vspapi->registerFunction("F1Quiver", "clip:vnode;filter:int[];morph:int:opt;custom:int:opt;test:int:opt;strow:int:opt;nrows:int:opt;gamma:float:opt;", "clip:vnode;", f1quiverCreate, NULL, plugin);
+	vspapi->registerFunction("F1QClean", "clip:vnode;span:int:opt;fromf:int:opt;upto:int:opt;", "clip:vnode;", f1qcleanCreate, NULL, plugin);
+	vspapi->registerFunction("F1QLimit", "clip:vnode;span:int:opt;limit:int:opt;freqs:int[]:opt;", "clip:vnode;", f1qlimitCreate, NULL, plugin);
+	vspapi->registerFunction("F2Quiver", "clip:vnode;frad:int:opt;ham:int:opt;test:int:opt;morph:int:opt;gamma:float:opt;fspec:int[]:opt;", "clip:vnode;", f2quiverCreate, NULL, plugin);
+	vspapi->registerFunction("F2QLimit", "clip:vnode;grid:int:opt;inner:int:opt;warn:int:opt;fspec:int[]:opt;", "clip:vnode;", f2qlimitCreate, NULL, plugin);
+	vspapi->registerFunction("F2QBlur", "clip:vnode;line:int:opt;x:int:opt;y:int:opt;", "clip:vnode;", f2qblurCreate, NULL, plugin);
+	vspapi->registerFunction("F2QSharp", "clip:vnode;line:int:opt;wn:float:opt;x:int:opt;y:int:opt;frad:int:opt;ham:int:opt;scale:float:opt;rgb:int[]:opt;yuv:int[]:opt;", "clip:vnode;", f2qsharpCreate, NULL, plugin);
+	vspapi->registerFunction("F2QCorr", "clip:vnode;bclip:vnode;cx:int:opt;cy:int:opt;txt:int:opt;filename:data:opt;sf:int:opt;ef:int:opt;every:int:opt;", "clip:vnode;", f2qcorrCreate, NULL, plugin);
+	vspapi->registerFunction("F2QBokeh", "clip:vnode;clipb:vnode;grid:int:opt;thresh:float:opt;rgb:int[]:opt;yuv:int[]:opt;", "clip:vnode;", f2qbokehCreate, NULL, plugin);
+	vspapi->registerFunction("Rotate", "clip:vnode;bkg:vnode;angle:float;dinc:float:opt;lx:int:opt;wd:int:opt;ty:int:opt;ht:int:opt;axx:int:opt;axy:int:opt;intq:int:opt;", "clip:vnode;", rotateCreate, NULL, plugin);
+	vspapi->registerFunction("DeBarrel", "clip:vnode;abc:float[];method:int:opt;pin:int:opt;q:int:opt;test:int:opt;dots:data:opt;dim:float:opt;", "clip:vnode;", debarrelCreate, NULL, plugin);
+	vspapi->registerFunction("Reform", "clip:vnode;bkg:vnode;intq:int:opt;norm:int:opt;rect:float[]:opt;quad:float[]:opt;q2r:int:opt;", "clip:vnode;", reformCreate, NULL, plugin);
+	vspapi->registerFunction("Fisheye", "clip:vnode;method:int:opt;xo:int:opt;yo:int:opt;frad:int:opt;sqr:int:opt;rix:float:opt;fov:float:opt;test:int:opt;dim:float:opt;q:int:opt;dots:int:opt;", "clip:vnode;", fisheyeCreate, NULL, plugin);
+	vspapi->registerFunction("ColorBox", "format:int:opt;luma:int:opt;nbw:int:opt;nbh:int:opt;", "clip:vnode;", colorBoxCreate, NULL, plugin);
+	vspapi->registerFunction("Grid", "clip:vnode;lineint:int:opt;bold:int:opt;vbold:int:opt;color:int[]:opt;bcolor:int[]:opt;vbcolor:int[]:opt;style:int:opt;", "clip:vnode;", gridCreate, NULL, plugin);
+	vspapi->registerFunction("Pattern", "clip:vnode;type:int:opt;orient:int:opt;spk:int:opt;spike:float:opt;wl:int:opt;x:int:opt;y:int:opt;rad:int:opt;stat:int:opt;overlay:float:opt;bgr:int[]:opt;", "clip:vnode;", patternCreate, NULL, plugin);
+	vspapi->registerFunction("Jitter", "clip:vnode;type:int:opt;jmax:int:opt;dense:data:opt;wl:int:opt;stat:int:opt;speed:data:opt;", "clip:vnode;", jitterCreate, NULL, plugin);
+	vspapi->registerFunction("DeJitter", "clip:vnode;jmax:int:opt;wsyn:int:opt;thresh:float:opt;", "clip:vnode;", dejitterCreate, NULL, plugin);
+	vspapi->registerFunction("Bokeh", "clip:vnode;clipb:vnode;grid:int:opt;thresh:float:opt;rgb:int[]:opt;yuv:int[]:opt;", "clip:vnode;", bokehCreate, NULL, plugin);
+	vspapi->registerFunction("StepFilter", "clip:vnode;add:int:opt;boost:float:opt;segmenthor:int:opt;segmentvert:int:opt;limit:int:opt;", "clip:vnode;", stepfilterCreate, NULL, plugin);
+	vspapi->registerFunction("Circles", "clip:vnode;xo:int:opt;yo:int:opt;frad:int:opt;cint:int:opt;dots:int:opt;rgb:int[]:opt;dim:float:opt;", "clip:vnode;", circlesCreate, NULL, plugin);
 }

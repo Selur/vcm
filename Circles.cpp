@@ -35,7 +35,7 @@ Copyright (C) <2021>  <V.C.Mohan>
 
 //-------------------------------------------------------------------------
 typedef struct {
-	VSNodeRef* node;
+	VSNode* node;
 	const VSVideoInfo* vi;
 
 	// circles origin coordinates
@@ -59,14 +59,13 @@ typedef struct {
  --------------------------------------------------*/
  //Here is the acutal constructor code used
 
-static void VS_CC circlesInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static void circlesInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	CirclesData* d = (CirclesData*)*instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 
 	int ht = d->vi->height;
 	int wd = d->vi->width;
-	const VSFormat* fi = d->vi->format;
+	const VSVideoFormat* fi = &d->vi->format;
 	int nbytes = fi->bytesPerSample;
 	int nbits = fi->bitsPerSample;
 	
@@ -80,21 +79,21 @@ static void VS_CC circlesInit(VSMap* in, VSMap* out, void** instanceData, VSNode
 	{
 		if (nbytes == 1)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				d->col[k] = bgr[k];
 			else
 				d->col[k] = yuv[k];
 		}
 		else if (nbytes == 2)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				*((uint16_t*)d->col + k) = (uint16_t)(bgr[k] << (nbits - 8));
 			else
 				*((uint16_t*)d->col + k) = (uint16_t)(yuv[k] << (nbits - 8));
 		}
 		else // float
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				*((float*)d->col + k) = (float)(bgr[k] / 255.0f);
 			else
 			{
@@ -110,10 +109,9 @@ static void VS_CC circlesInit(VSMap* in, VSMap* out, void** instanceData, VSNode
 
 //------------------------------------------------------------------------------------------------
 
-static const VSFrameRef* VS_CC circlesGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	CirclesData* d = (CirclesData*)*instanceData;
+static const VSFrame* VS_CC circlesGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	CirclesData* d = (CirclesData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -121,9 +119,9 @@ static const VSFrameRef* VS_CC circlesGetFrame(int n, int activationReason, void
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
-		VSFrameRef* dst;
-		const VSFormat* fi = d->vi->format;
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		VSFrame* dst;
+		const VSVideoFormat* fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
 		int width = vsapi->getFrameWidth(src, 0);
 		int nbits = fi->bitsPerSample;
@@ -144,8 +142,13 @@ static const VSFrameRef* VS_CC circlesGetFrame(int n, int activationReason, void
 			const uint8_t* sp = vsapi->getReadPtr(src, p);
 			uint8_t* dp = vsapi->getWritePtr(dst, p);
 			int pitch = vsapi->getStride(src, p) / nbytes;
+			// chroma planes of subsampled YUV formats are smaller than the luma plane
+			int subW = p == 0 ? 0 : fi->subSamplingW;
+			int subH = p == 0 ? 0 : fi->subSamplingH;
+			int pwidth = vsapi->getFrameWidth(src, p);
+			int pheight = vsapi->getFrameHeight(src, p);
 			
-			if ( fi->colorFamily == cmRGB)
+			if ( fi->colorFamily == cfRGB)
 			{
 					if (nbytes == 1)
 						dimplaneRGB(dp,sp, pitch, width, height, d->dim);
@@ -154,7 +157,7 @@ static const VSFrameRef* VS_CC circlesGetFrame(int n, int activationReason, void
 					else if (nbytes == 4)
 						dimplaneRGB((float*)dp, (float *)sp, pitch, width, height, d->dim);
 			}
-			else if (p == 0 && fi->colorFamily == cmYUV)
+			else if (p == 0 && fi->colorFamily == cfYUV)
 			{
 				if (nbytes == 1)
 				{
@@ -191,9 +194,9 @@ static const VSFrameRef* VS_CC circlesGetFrame(int n, int activationReason, void
 					{
 						for (int j = -1; j < 2; j += 2)
 						{
-							int w = d->origin_x + x * j;
-							int h = d->origin_y + y * i;
-							if (w >= 0 && w < width && h >= 0 && h < height)
+							int w = (d->origin_x + x * j) >> subW;
+							int h = (d->origin_y + y * i) >> subH;
+							if (w >= 0 && w < pwidth && h >= 0 && h < pheight)
 							{
 								if (nbytes == 1)
 									*(dp + h * pitch + w) = d->col[p];
@@ -233,24 +236,24 @@ static void VS_CC circlesCreate(const VSMap* in, VSMap* out, void* userData,
 	int temp;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 
 	// In this first version we only want to handle 8bit integer formats. Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0
-		|| (d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray
-			&& d.vi->format->colorFamily != cmRGB))
+	if (!isConstantVideoFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0
+		|| (d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray
+			&& d.vi->format.colorFamily != cfRGB))
 	{
-		vsapi->setError(out, "Circles: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
+		vsapi->mapSetError(out, "Circles: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
 
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Circles: half float input not allowed.");
+		vsapi->mapSetError(out, "Circles: half float input not allowed.");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -262,69 +265,69 @@ static void VS_CC circlesCreate(const VSMap* in, VSMap* out, void* userData,
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.	
 	
-	d.origin_x = int64ToIntS(vsapi->propGetInt(in, "xo", 0, &err));
+	d.origin_x = int64ToIntS(vsapi->mapGetInt(in, "xo", 0, &err));
 	if (err)
 		d.origin_x = d.vi->width / 2;
 
-	d.origin_y = int64ToIntS(vsapi->propGetInt(in, "yo", 0, &err));
+	d.origin_y = int64ToIntS(vsapi->mapGetInt(in, "yo", 0, &err));
 	if (err)
 		d.origin_y = d.vi->height / 2;
 
-	d.fdia = int64ToIntS(vsapi->propGetInt(in, "frad", 0, &err)) * 2;
+	d.fdia = int64ToIntS(vsapi->mapGetInt(in, "frad", 0, &err)) * 2;
 	if (err)
 		d.fdia = (d.vi->height > d.vi->width ? d.vi->width : d.vi->height) * 2;
 
 	else if (d.fdia < 128 )
 	{
-		vsapi->setError(out, "Circles: frad must be at least 64  ");
+		vsapi->mapSetError(out, "Circles: frad must be at least 64  ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	if ( (d.origin_x + d.fdia < 0 || d.origin_x - d.fdia > d.vi->width) 
 		|| (d.origin_y + d.fdia < 0 || d.origin_y - d.fdia > d.vi->height))
 	{
-		vsapi->setError(out, "Circles: fdia and origin takes the fisheye image outside frame  ");
+		vsapi->mapSetError(out, "Circles: fdia and origin takes the fisheye image outside frame  ");
 			vsapi->freeNode(d.node);
 			return;
 	}
-	d.cint = int64ToIntS(vsapi->propGetInt(in, "cint", 0, &err));
+	d.cint = int64ToIntS(vsapi->mapGetInt(in, "cint", 0, &err));
 	if (err)
 		d.cint = 50;
 
 	else if (d.cint < 10 || d.cint > VSMAX(d.vi->width, d.vi->height) / 2 )
 	{
-		vsapi->setError(out, "Circles: cint must be at least 10 and not more than half of max dimension of frame");
+		vsapi->mapSetError(out, "Circles: cint must be at least 10 and not more than half of max dimension of frame");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	d.dots = int64ToIntS(vsapi->propGetInt(in, "dots", 0, &err));
+	d.dots = int64ToIntS(vsapi->mapGetInt(in, "dots", 0, &err));
 	if (err)
 		d.dots = 2;
 	else if (d.dots < 1 || d.dots > 4)
 	{
-		vsapi->setError(out, "Circles: dots must be 1 to 4 only ");
+		vsapi->mapSetError(out, "Circles: dots must be 1 to 4 only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.dim = (float)(1.0 - vsapi->propGetFloat(in, "dim", 0, &err));
+	d.dim = (float)(1.0 - vsapi->mapGetFloat(in, "dim", 0, &err));
 	if (err)
 		d.dim = 0.25f;
 	if (d.dim < 0.0f || d.dim > 1.0f)
 	{
-		vsapi->setError(out, "Circles: dim must be from 0 to 1.0 only ");
+		vsapi->mapSetError(out, "Circles: dim must be from 0 to 1.0 only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	for (int i = 0; i < 3; i++)
 	{
-		temp = int64ToIntS(vsapi->propGetInt(in, "rgb", 0, &err));
+		temp = int64ToIntS(vsapi->mapGetInt(in, "rgb", 0, &err));
 		if (err)
 			d.bgr[2 - i] = (uint8_t)255;
 		else if (temp < 0 || temp > 255)
 		{
-			vsapi->setError(out, "Circles: rgb array values must be from 0 to 255 only ");
+			vsapi->mapSetError(out, "Circles: rgb array values must be from 0 to 255 only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -336,7 +339,17 @@ static void VS_CC circlesCreate(const VSMap* in, VSMap* out, void* userData,
 	data = (CirclesData*)malloc(sizeof(d));
 	*data = d;
 
-	vsapi->createFilter(in, out, "Circles", circlesInit, circlesGetFrame, circlesFree, fmParallel, 0, data, core);
+	circlesInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "Circles", data->vi, circlesGetFrame, circlesFree, fmParallel, deps, ndeps, data, core);
 
 }
 

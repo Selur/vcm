@@ -409,7 +409,7 @@ float* setInterpolationScheme(const int q, const int quantiles, int *dspan)
 	{
 		// bilinear
 		span = 2;
-		iCoeff = (float*)vs_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
+		iCoeff = (float*)vsh_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
 		LinearIntCoeff(iCoeff, quantiles);
 		break;
 	}
@@ -418,14 +418,14 @@ float* setInterpolationScheme(const int q, const int quantiles, int *dspan)
 	{
 
 		span = 4; // cubic
-		iCoeff = (float*)vs_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
+		iCoeff = (float*)vsh_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
 		CubicIntCoeff(iCoeff, quantiles);
 		break;
 	}
 	case 4:
 	{
 		span = 6; // lanczos is 6 x 6
-		iCoeff = (float*)vs_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
+		iCoeff = (float*)vsh_aligned_malloc<float>(sizeof(float) * span * (quantiles + 1), 32);
 		// create lanczos coefficients for every quantile
 		LanczosCoeff(iCoeff, span, quantiles);
 		break;

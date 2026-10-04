@@ -29,7 +29,7 @@ ColorBox filter plugin for vapoursynth by V.C.Mohan
 //----------------------------
 typedef struct {
 	
-	VSFrameRef* f;
+	VSFrame* f;
 	VSVideoInfo vi;
 	bool keep;
 	int luma;
@@ -55,11 +55,11 @@ void paintBoxes(finc* dp, int pitch, finc col, finc winc, finc hinc, int wd, int
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC colorBoxInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi) {
+static void colorBoxInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
+{
 	ColorBoxData* d = (ColorBoxData*)*instanceData;
 	//vsapi->setVideoInfo(d->vi, 1, node);
 	
-	vsapi->setVideoInfo(&d->vi, 1, node);
 	d->f = NULL;
 
 }
@@ -144,18 +144,17 @@ void paintBoxes(finc* dp, int pitch, finc col, finc winc, finc hinc, int wd, int
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef* VS_CC colorBoxGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	ColorBoxData* d = (ColorBoxData*)*instanceData;
+static const VSFrame* VS_CC colorBoxGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	ColorBoxData* d = (ColorBoxData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
-		VSFrameRef* dst = NULL;
+		VSFrame* dst = NULL;
 		if (d->f == NULL) 
 		{
-			dst = vsapi->newVideoFrame(d->vi.format, d->vi.width, d->vi.height, 0, core);
-			const VSFormat* fi = d->vi.format;
+			dst = vsapi->newVideoFrame(&d->vi.format, d->vi.width, d->vi.height, 0, core);
+			const VSVideoFormat* fi = &d->vi.format;
 			int height = vsapi->getFrameHeight(dst, 0);
 			int width = vsapi->getFrameWidth(dst, 0);
 			int nbytes = fi->bytesPerSample;
@@ -331,9 +330,9 @@ static const VSFrameRef* VS_CC colorBoxGetFrame(int n, int activationReason, voi
 
 			if (d->vi.fpsNum > 0)
 			{
-				VSMap* frameProps = vsapi->getFramePropsRW(dst);
-				vsapi->propSetInt(frameProps, "_DurationNum", d->vi.fpsDen, paReplace);
-				vsapi->propSetInt(frameProps, "_DurationDen", d->vi.fpsNum, paReplace);
+				VSMap* frameProps = vsapi->getFramePropertiesRW(dst);
+				vsapi->mapSetInt(frameProps, "_DurationNum", d->vi.fpsDen, maReplace);
+				vsapi->mapSetInt(frameProps, "_DurationDen", d->vi.fpsNum, maReplace);
 			}
 		}
 
@@ -341,7 +340,7 @@ static const VSFrameRef* VS_CC colorBoxGetFrame(int n, int activationReason, voi
 		{
 			if (dst != NULL)
 				d->f = dst;
-			return vsapi->cloneFrameRef(d->f);
+			return vsapi->addFrameRef(d->f);
 		}
 		else 
 		{
@@ -375,7 +374,7 @@ static void VS_CC colorBoxCreate(const VSMap* in, VSMap* out, void* userData, VS
 	
 	d.vi.numFrames = int64ToIntS((d.vi.fpsNum * 100) / d.vi.fpsDen);
 	
-	d.luma = (int)vsapi->propGetInt(in, "luma", 0, &err);
+	d.luma = (int)vsapi->mapGetInt(in, "luma", 0, &err);
 	
 	if (err)
 		d.luma = 40;
@@ -383,12 +382,12 @@ static void VS_CC colorBoxCreate(const VSMap* in, VSMap* out, void* userData, VS
 	{
 		if (d.luma > 99 || d.luma < 1)
 		{
-			vsapi->setError(out, "ColorBox: Luma percentage must be between 1 & 99");
+			vsapi->mapSetError(out, "ColorBox: Luma percentage must be between 1 & 99");
 			
 			return;
 		}
 	}
-	d.nBoxesW = (int)vsapi->propGetInt(in, "nbw", 0, &err);
+	d.nBoxesW = (int)vsapi->mapGetInt(in, "nbw", 0, &err);
 
 	if (err)
 		d.nBoxesW = 6;
@@ -396,13 +395,13 @@ static void VS_CC colorBoxCreate(const VSMap* in, VSMap* out, void* userData, VS
 	{
 		if (d.nBoxesW > 12 || d.nBoxesW < 2)
 		{
-			vsapi->setError(out, "ColorBox: nbw must be between 2 and 12");
+			vsapi->mapSetError(out, "ColorBox: nbw must be between 2 and 12");
 
 			return;
 		}
 	}
 
-	d.nBoxesH = (int)vsapi->propGetInt(in, "nbh", 0, &err);
+	d.nBoxesH = (int)vsapi->mapGetInt(in, "nbh", 0, &err);
 
 	if (err)
 		d.nBoxesH = 4;
@@ -410,32 +409,31 @@ static void VS_CC colorBoxCreate(const VSMap* in, VSMap* out, void* userData, VS
 	{
 		if (d.nBoxesH > 12 || d.nBoxesH < 2)
 		{
-			vsapi->setError(out, "ColorBox: nbh must be between 2 and 12");
+			vsapi->mapSetError(out, "ColorBox: nbh must be between 2 and 12");
 
 			return;
 		}
 	}
-	int format = int64ToIntS(vsapi->propGetInt(in, "format", 0, &err));
+	int format = int64ToIntS(vsapi->mapGetInt(in, "format", 0, &err));
 
 	if (err)
-		d.vi.format = vsapi->getFormatPreset(pfYUV444P8, core);
+		vsapi->getVideoFormatByID(&d.vi.format, pfYUV444P8, core);
 	else
 	{
-		d.vi.format = vsapi->getFormatPreset(format, core);
-		if ( !d.vi.format)
+		if (!vsapi->getVideoFormatByID(&d.vi.format, format, core))
 		{
-			vsapi->setError(out, "ColorBox: invalid format");
+			vsapi->mapSetError(out, "ColorBox: invalid format");
 			
 			return;
 		}
 	}
-	if(d.vi.format->colorFamily != cmYUV || (d.vi.format->id == pfYUV444PH) )
+	if(d.vi.format.colorFamily != cfYUV || (d.vi.format.sampleType == stFloat && d.vi.format.bitsPerSample == 16) )
 	{
-		vsapi->setError(out, "ColorBox: YUV integer and single float formats only allowed");
+		vsapi->mapSetError(out, "ColorBox: YUV integer and single float formats only allowed");
 		
 		return;
 	}
-	int subH = d.vi.format->subSamplingH, subW = d.vi.format->subSamplingW;
+	int subH = d.vi.format.subSamplingH, subW = d.vi.format.subSamplingW;
 
 	
 	d.wBoxIncU = 29 << subW;
@@ -458,7 +456,13 @@ static void VS_CC colorBoxCreate(const VSMap* in, VSMap* out, void* userData, VS
 
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "colorBox", colorBoxInit, colorBoxGetFrame, colorBoxFree, fmUnordered, nfNoCache, data, core);
+	colorBoxInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	vsapi->createVideoFilter(out, "colorBox", &data->vi, colorBoxGetFrame, colorBoxFree, fmUnordered, NULL, 0, data, core);
 }
 
 //////////////////////////////////////////

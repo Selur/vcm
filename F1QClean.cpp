@@ -41,7 +41,7 @@ jun 2015, 14 sep 2020, 26 May 2021  21 dec 2025
 
 typedef struct
 {
-		VSNodeRef *node;
+		VSNode *node;
 		const VSVideoInfo *vi;	
 		
 		int span;		// number of filters or for custo pairs specified
@@ -84,7 +84,7 @@ void getAmpSqValues(float *ampSquareBuf, fftwf_complex * outBuf, int freqWidth);
 
 void cleanOutBuf(fftwf_complex* outBuf, float* ampSquareBuf, 
 				float **sortBuf, int span,int from,int upto, int freqWidth);
-void limitMaxAmplitudeInSpan(fftwf_complex* outBuf, int frequency, int span, int limit);
+void limitMaxAmplitudeInSpan(fftwf_complex* outBuf, int frequency, int span, int limit, int freqWidth);
 
 void scaleValues(fftwf_complex* outBuf, int freqWidth, float scale);
 
@@ -92,19 +92,17 @@ void scaleValues(fftwf_complex* outBuf, int freqWidth, float scale);
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC f1qcleanInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, 
-								VSCore *core, const VSAPI *vsapi) 
+static void f1qcleanInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     F1QClean *d = (F1QClean *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 
-	int * facbuf = (int *) vs_aligned_malloc <int>(sizeof( int) *64, 32);	//maximum 64 factors, in this buf values filled are pairs of first is factor, second is dividend to be factored. At 
+	int * facbuf = (int *) vsh_aligned_malloc <int>(sizeof( int) *64, 32);	//maximum 64 factors, in this buf values filled are pairs of first is factor, second is dividend to be factored. At 
 								// a value of 1 no more factors	
 	//	wbest dimensions for speed. make sure starting with even number for width
 	int wdEven = ((d->vi->width + 3) >> 2) << 2;
 	d->wbest = getBestDim(wdEven, facbuf);
 	
-	vs_aligned_free(facbuf);
+	vsh_aligned_free(facbuf);
 
 	d->freqWidth = d->wbest / 2 + 1;
 	d->span = ((d->span * d->freqWidth) / NYQUIST) | 1;
@@ -125,7 +123,7 @@ static void VS_CC f1qcleanInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 
 	if (!ok)
 	{
-		vsapi->setError(out, "F1QClean or F1QLimit: could not load any of the dll or get required fnctions");
+		vsapi->mapSetError(out, "F1QClean or F1QLimit: could not load any of the dll or get required fnctions");
 		if (d->hinstLib != NULL)
 			FreeLibrary(d->hinstLib);
 		vsapi->freeNode(d->node);
@@ -144,7 +142,7 @@ static void VS_CC f1qcleanInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		{
 			d->ampSquareBuf = (float*)d->fftwf_malloc(sizeof(float) * d->freqWidth);
 
-			d->sortBuf = (float**)vs_aligned_malloc(sizeof(float*) * d->span, 32);
+			d->sortBuf = (float**)vsh_aligned_malloc(sizeof(float*) * d->span, 32);
 		}
 		// get fft sine cosine config buffers allocated by plans	
 		d->pf = d->fftwf_plan_dft_r2c_1d(d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE | FFTW_DESTROY_INPUT);
@@ -184,7 +182,7 @@ void f1qCleanProcessFull(F1QClean* d, const finc * sp, finc * dp, const int pitc
 		{
 			for (int i = 0; i < d->nfrequencies; i++)
 			{
-				limitMaxAmplitudeInSpan(d->outBuf, d->frequency[i], d->span, d->limit);
+				limitMaxAmplitudeInSpan(d->outBuf, d->frequency[i], d->span, d->limit, d->freqWidth);
 			}
 
 		}
@@ -238,14 +236,14 @@ void cleanOutBuf(fftwf_complex* outBuf, float* ampSquareBuf,
 	
 }
 
-void limitMaxAmplitudeInSpan(fftwf_complex * outBuf, int frequency, int span, int limit)
+void limitMaxAmplitudeInSpan(fftwf_complex * outBuf, int frequency, int span, int limit, int freqWidth)
 {
 	float max = 0.0f;
 	float local;
 	float lim = limit / 100.0f;
-	int point = 0;
+	int point = frequency;
 
-	for (int i = frequency - span; i < frequency + span; i++)
+	for (int i = VSMAX(frequency - span, 0); i < VSMIN(frequency + span, freqWidth); i++)
 	{
 		local = getAmpSquareOfComplex(outBuf + i);
 		if (local > max)
@@ -255,7 +253,7 @@ void limitMaxAmplitudeInSpan(fftwf_complex * outBuf, int frequency, int span, in
 		}
 	}
 	// point and neighbours are zeroed
-	for (int i = point - 1; i <= point + 1; i++)
+	for (int i = VSMAX(point - 1, 0); i <= VSMIN(point + 1, freqWidth - 1); i++)
 	{
 		outBuf[i][0] *= lim;
 		outBuf[i][1] *= lim;
@@ -271,10 +269,9 @@ void limitMaxAmplitudeInSpan(fftwf_complex * outBuf, int frequency, int span, in
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC f1qcleanGetFrame(int n, int activationReason, void **instanceData, void **frameData,
-						VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-    F1QClean *d = (F1QClean *) * instanceData;
+static const VSFrame *VS_CC f1qcleanGetFrame(int n, int activationReason, void *instanceData, void **frameData,
+						VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    F1QClean *d = (F1QClean *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -284,13 +281,13 @@ static const VSFrameRef *VS_CC f1qcleanGetFrame(int n, int activationReason, voi
 	else if (activationReason == arAllFramesReady)
 	{
 		
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
 
-		const VSFormat* fi = d->vi->format;
+		const VSVideoFormat* fi = &d->vi->format;
 		// process R,G,B or  Y component only will be processed
-		int nplanes = fi->colorFamily == cmRGB ? 3 : fi->numPlanes;
+		int nplanes = fi->colorFamily == cfRGB ? 3 : fi->numPlanes;
 		
-		VSFrameRef* dst = vsapi->copyFrame(src, core);
+		VSFrame* dst = vsapi->copyFrame(src, core);
 
 		int nbytes = fi->bytesPerSample;
 		int nbits = fi->bitsPerSample;
@@ -355,7 +352,7 @@ static void VS_CC f1qcleanFree(void *instanceData, VSCore *core, const VSAPI *vs
 		if (d->option == 2)
 		{
 			d->fftwf_free(d->ampSquareBuf);
-			vs_aligned_free(d->sortBuf);
+			vsh_aligned_free(d->sortBuf);
 		}
 		d->fftwf_free(d->inBuf);
 		d->fftwf_free(d->outBuf);
@@ -377,23 +374,23 @@ static void VS_CC f1qcleanCreate(const VSMap *in, VSMap *out, void *userData, VS
     int err;
 	//int temp;
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // In this first version we only want to handle 8bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isConstantFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0 
-		|| (d.vi->format->colorFamily != cmYUV 	&& d.vi->format->colorFamily != cmGray
-			 &&  d.vi->format->colorFamily != cmRGB) )
+    if (!isConstantVideoFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0 
+		|| (d.vi->format.colorFamily != cfYUV 	&& d.vi->format.colorFamily != cfGray
+			 &&  d.vi->format.colorFamily != cfRGB) )
 	{
-        vsapi->setError(out, "F1QClean: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
+        vsapi->mapSetError(out, "F1QClean: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
         vsapi->freeNode(d.node);
         return;
     }
 	
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "F1QClean: Half float formats not allowed ");
+		vsapi->mapSetError(out, "F1QClean: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -407,34 +404,34 @@ static void VS_CC f1qcleanCreate(const VSMap *in, VSMap *out, void *userData, VS
 	d.option = 2;
 	d.limit = 0;
 	d.span = 3;
-	d.from = int64ToIntS(vsapi->propGetInt(in, "span", 0, &err));
+	d.span = int64ToIntS(vsapi->mapGetInt(in, "span", 0, &err));
 	if (err)
 		d.span = 5;
 	else if (d.span < 3 || d.span > 63 || (d.span & 1 ) == 0 )
 	{
-		vsapi->setError(out, "F1QClean: span must be be odd number between 3 and 63 ");
+		vsapi->mapSetError(out, "F1QClean: span must be be odd number between 3 and 63 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	d.from = int64ToIntS(vsapi->propGetInt(in, "fromf", 0, &err));
+	d.from = int64ToIntS(vsapi->mapGetInt(in, "fromf", 0, &err));
 	if (err)
 		d.from = 30;
 	
 	else if (d.from < 10 + d.span / 2 || d.from > NYQUIST / 2 - 11 - d.span / 2)
 	{
-		vsapi->setError(out, "F1QClean: fromf must be be between 10 + half of span and less than  245 - half of span ");
+		vsapi->mapSetError(out, "F1QClean: fromf must be be between 10 + half of span and less than  245 - half of span ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.upto = int64ToIntS(vsapi->propGetInt(in, "upto", 0, &err));
+	d.upto = int64ToIntS(vsapi->mapGetInt(in, "upto", 0, &err));
 	if (err)
 		d.upto = NYQUIST -  10 - d.span;
 	
 	else if (d.upto < d.from + d.span  || d.upto > NYQUIST - 10 - d.span)
 	{
-		vsapi->setError(out, "F1QClean: upto can be between fromf + span to  502 - span  ");
+		vsapi->mapSetError(out, "F1QClean: upto can be between fromf + span to  502 - span  ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -445,7 +442,17 @@ static void VS_CC f1qcleanCreate(const VSMap *in, VSMap *out, void *userData, VS
     data = (F1QClean *) malloc(sizeof(d));
     *data = d;
 
-	vsapi->createFilter(in, out, "F1QClean", f1qcleanInit, f1qcleanGetFrame, f1qcleanFree, fmParallelRequests, 0, data, core);
+	f1qcleanInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "F1QClean", data->vi, f1qcleanGetFrame, f1qcleanFree, fmParallelRequests, deps, ndeps, data, core);
 
 }
 
@@ -459,21 +466,21 @@ static void VS_CC f1qlimitCreate(const VSMap* in, VSMap* out, void* userData, VS
 	int err;
 	//int temp;
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0
-		|| (d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray
-			&& d.vi->format->colorFamily != cmRGB))
+	if (!isConstantVideoFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0
+		|| (d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray
+			&& d.vi->format.colorFamily != cfRGB))
 	{
-		vsapi->setError(out, "F1QLimit: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
+		vsapi->mapSetError(out, "F1QLimit: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "F1QLimit: Half float formats not allowed ");
+		vsapi->mapSetError(out, "F1QLimit: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -485,41 +492,41 @@ static void VS_CC f1qlimitCreate(const VSMap* in, VSMap* out, void* userData, VS
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
 	d.option = 1;	
-	d.span = int64ToIntS(vsapi->propGetInt(in, "span", 0, &err));
+	d.span = int64ToIntS(vsapi->mapGetInt(in, "span", 0, &err));
 	if (err)
 		d.span =  15;
 	else if (d.span < 3 || d.span > NYQUIST / 8 || (d.span & 1) == 0)
 		{
-			vsapi->setError(out, "F1QLimit: span must  be odd number  3 to 63");
+			vsapi->mapSetError(out, "F1QLimit: span must  be odd number  3 to 63");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	d.span |= 1;	// make it odd number
 
-	d.limit = int64ToIntS(vsapi->propGetInt(in, "limit", 0, &err));
+	d.limit = int64ToIntS(vsapi->mapGetInt(in, "limit", 0, &err));
 	if (err)
 		d.limit = 50;
 	else if (d.limit < 0 || d.limit > 99)
 	{
-		vsapi->setError(out, "F1QLimit: limit percentage value can be 0 to 99");
+		vsapi->mapSetError(out, "F1QLimit: limit percentage value can be 0 to 99");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	d.nfrequencies = vsapi->propNumElements(in, "freqs");
+	d.nfrequencies = vsapi->mapNumElements(in, "freqs");
 	if (d.nfrequencies == -1 || d.nfrequencies > 10)
 	{
-		vsapi->setError(out, "F1QLimit: for option 1, at least one and not more than 10 freqs must be specified in the array");
+		vsapi->mapSetError(out, "F1QLimit: for option 1, at least one and not more than 10 freqs must be specified in the array");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
 	for (int i = 0; i < d.nfrequencies; i++)
 	{
-		d.frequency[i] = int64ToIntS(vsapi->propGetInt(in, "freqs", i, 0));
+		d.frequency[i] = int64ToIntS(vsapi->mapGetInt(in, "freqs", i, 0));
 		if (d.frequency[i] < 10 + d.span / 2 || d.frequency[i] > NYQUIST - 10 - d.span / 2)
 		{
-			vsapi->setError(out, "F1QLimit:  freqs must be between 10 + half of span and 502 - half of span");
+			vsapi->mapSetError(out, "F1QLimit:  freqs must be between 10 + half of span and 502 - half of span");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -532,7 +539,17 @@ static void VS_CC f1qlimitCreate(const VSMap* in, VSMap* out, void* userData, VS
 	data = (F1QClean*)malloc(sizeof(d));
 	*data = d;
 
-	vsapi->createFilter(in, out, "F1QLimit", f1qcleanInit, f1qcleanGetFrame, f1qcleanFree, fmParallelRequests, 0, data, core);
+	f1qcleanInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "F1QLimit", data->vi, f1qcleanGetFrame, f1qcleanFree, fmParallelRequests, deps, ndeps, data, core);
 
 }
 

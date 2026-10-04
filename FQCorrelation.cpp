@@ -41,7 +41,7 @@ For details of how to contact author see <http://www.avisynth.nl/users/vcmohan/v
 #include <stdio.h>
 typedef struct
 {
-	VSNodeRef *node[2];
+	VSNode *node[2];
 	VSVideoInfo vi;
 	const VSVideoInfo *avi;
 	// float gamma;			// correlation scaling. Not used		
@@ -85,25 +85,23 @@ typedef struct
 *************************************************/
 //Here is the acutal constructor code used
 
-static void VS_CC f2qcorrInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void f2qcorrInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	F2QCorrData *d = (F2QCorrData *)* instanceData;
 	//vsapi->setVideoInfo(d->vi, 1, node);	
 	const int fht = ((d->avi->height + 3) >> 2) << 2;
 	const int fwd = ((d->avi->width + 3) >> 2) << 2;
-	int* facbuf = (int*)vs_aligned_malloc(sizeof(int) * 64, 32);
+	int* facbuf = (int*)vsh_aligned_malloc(sizeof(int) * 64, 32);
 	
 	d->wbest = getBestDim(fwd, facbuf);
 	d->hbest = getBestDim(fht, facbuf);
-	vs_aligned_free(facbuf);
+	vsh_aligned_free(facbuf);
 	d->vi.height = d->hbest;
 	d->vi.width = d->wbest;
 	d->vi.format = d->avi->format;
 	d->vi.numFrames = d->avi->numFrames;
 	d->vi.fpsDen = d->avi->fpsDen;
 	d->vi.fpsNum = d->avi->fpsNum;
-	d->vi.flags = d->avi->flags;
-	vsapi->setVideoInfo(&d->vi, 1, node);
 	d->freqWidth = d->wbest / 2 + 1;	// for real data this is the output width in the first transform
 
 	d->f2size = d->hbest * d->freqWidth;
@@ -112,10 +110,9 @@ static void VS_CC f2qcorrInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 		errno_t err = fopen_s(&d->ofile, d->filename, "w");
 		if (err != 0)
 		{
-			vsapi->setError(out, "FQCorr:init: could not open output text file");
+			vsapi->mapSetError(out, "FQCorr:init: could not open output text file");
 			vsapi->freeNode(d->node[0]);
 			vsapi->freeNode(d->node[1]);
-			free(d);
 			return;
 		}
 		// heading and explanation of file
@@ -129,12 +126,11 @@ static void VS_CC f2qcorrInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 
 	if (!ok)
 	{
-		vsapi->setError(out, "FQCorr: could not load fft dll");
+		vsapi->mapSetError(out, "FQCorr: could not load fft dll");
 		vsapi->freeNode(d->node[0]);
 		vsapi->freeNode(d->node[1]);
 		if (d->txt && d->ofile != NULL)
 			fclose(d->ofile);
-		free (d);
 		return;
 	}
 
@@ -289,10 +285,9 @@ int xFullProcess(F2QCorrData* d,  // forward fft of the two input frames
 }
 
 //---------------------------------------------------------------------------------------------
-static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void **instanceData,
-	void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-	F2QCorrData *d = (F2QCorrData *)* instanceData;
+static const VSFrame *VS_CC f2qcorrGetFrame(int n, int activationReason, void *instanceData,
+	void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+	F2QCorrData *d = (F2QCorrData *)instanceData;
 
 	if (activationReason == arInitial) {
 		// Request the source frames on the first call
@@ -301,8 +296,8 @@ static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef *srcA = vsapi->getFrameFilter(n, d->node[0], frameCtx);
-		const VSFrameRef *srcB = vsapi->getFrameFilter(n, d->node[1], frameCtx);
+		const VSFrame *srcA = vsapi->getFrameFilter(n, d->node[0], frameCtx);
+		const VSFrame *srcB = vsapi->getFrameFilter(n, d->node[1], frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
@@ -311,11 +306,11 @@ static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void
 		int wd = vsapi->getFrameWidth(srcA, 0);
 		int owd = d->vi.width;
 		int oht = d->vi.height;
-		//VSFrameRef *dst;
-		const VSFormat *fi = d->vi.format;
-		VSFrameRef *dst = vsapi->newVideoFrame(fi, owd, oht, srcA, core);
+		//VSFrame *dst;
+		const VSVideoFormat *fi = &d->vi.format;
+		VSFrame *dst = vsapi->newVideoFrame(fi, owd, oht, srcA, core);
 				// use green for RGB and Y for YUV
-		int plane = fi->colorFamily == cmRGB ? 1 : 0;	
+		int plane = fi->colorFamily == cfRGB ? 1 : 0;	
 
 		const uint8_t *srcpA = vsapi->getReadPtr(srcA, plane);
 		const uint8_t *srcpB = vsapi->getReadPtr(srcB, plane);
@@ -368,7 +363,7 @@ static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void
 		{
 			for (plane = 0; plane < fi->numPlanes; plane++)
 			{
-				if ((fi->colorFamily == cmRGB && plane == 1) || (fi->colorFamily == cmYUV && plane == 0))
+				if ((fi->colorFamily == cfRGB && plane == 1) || (fi->colorFamily == cfYUV && plane == 0))
 					continue;
 				uint8_t *dstp = vsapi->getWritePtr(dst, plane);
 				int dpitch = vsapi->getStride(dst, plane) / fi->bytesPerSample;
@@ -383,13 +378,13 @@ static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void
 				if (nbytes == 1)
 				{
 
-					uint8_t grey = fi->colorFamily == cmRGB ? 0 : 128;
+					uint8_t grey = fi->colorFamily == cfRGB ? 0 : 128;
 					fillPlaneWithVal(dstp, dpitch, dwd, dht, grey);
 					//xFillPlaneWithVal(dstp, dpitch, dwd, dht, grey);
 				}
 				else if (nbytes == 2)
 				{
-					uint16_t grey = fi->colorFamily == cmRGB ? 0 : 1 << (nbits - 1);
+					uint16_t grey = fi->colorFamily == cfRGB ? 0 : 1 << (nbits - 1);
 
 					fillPlaneWithVal((uint16_t*)dstp, dpitch, dwd, dht, grey);
 				}
@@ -401,13 +396,13 @@ static const VSFrameRef *VS_CC f2qcorrGetFrame(int n, int activationReason, void
 				}
 			}	/// for plane = 1;....
 		}	// if num planes > 1
-		if (fi->colorFamily == cmRGB)
+		if (fi->colorFamily == cfRGB)
 		{
 			// copy Green on to Blu and Red planes
-			vs_bitblt(vsapi->getWritePtr(dst, 0), vsapi->getStride(dst, 0),
+			bitblt(vsapi->getWritePtr(dst, 0), vsapi->getStride(dst, 0),
 				vsapi->getWritePtr(dst, 1), vsapi->getStride(dst, 1),
 				wd * nbytes, ht);
-			vs_bitblt(vsapi->getWritePtr(dst, 2), vsapi->getStride(dst, 2),
+			bitblt(vsapi->getWritePtr(dst, 2), vsapi->getStride(dst, 2),
 				vsapi->getWritePtr(dst, 1), vsapi->getStride(dst, 1),
 				wd * nbytes, ht);
 		}
@@ -485,33 +480,26 @@ static void VS_CC f2qcorrCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	int err;
 	int temp;
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node[0] = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node[0] = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.avi = vsapi->getVideoInfo(d.node[0]);
 	
 	// get second clip
-	d.node[1] = vsapi->propGetNode(in, "bclip", 0, 0);
+	d.node[1] = vsapi->mapGetNode(in, "bclip", 0, 0);
 	const VSVideoInfo *bvi = vsapi->getVideoInfo(d.node[1]);
 
-	if (!isSameFormat(d.avi, bvi) || d.avi->numFrames != bvi->numFrames  )
+	if (!isSameVideoInfo(d.avi, bvi) || d.avi->numFrames != bvi->numFrames  )
 	{
-		vsapi->setError(out, "F2QCorr: both clips must be of same format, length and frame dimensions ");
-		vsapi->freeNode(d.node[0]);
-		vsapi->freeNode(d.node[1]);
-		return;
-	}
-	if (d.avi->format->colorFamily == cmCompat)
-	{
-		vsapi->setError(out, "F2QCorr: compat format is not accepted. Only Planar format clips can be input ");
+		vsapi->mapSetError(out, "F2QCorr: both clips must be of same format, length and frame dimensions ");
 		vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
 		return;
 	}
 	// In this first version we only want to handle 8bit integer formats. Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.avi) || d.avi->width == 0 || d.avi->height == 0
+	if (!isConstantVideoFormat(d.avi) || d.avi->width == 0 || d.avi->height == 0
 		|| d.avi->width != bvi->width || d.avi->height != bvi->height)
 	{
-		vsapi->setError(out, "F2QCorr: only constant format and const frame dimensions input supported");
+		vsapi->mapSetError(out, "F2QCorr: only constant format and const frame dimensions input supported");
 		vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
 		return;
@@ -526,31 +514,31 @@ static void VS_CC f2qcorrCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	// strict checking because of what we wrote in the argument string, the only
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "txt", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "txt", 0, &err));
 	if (err || temp == 0)
 		d.txt = false;
 	else
 		d.txt = true;
 	if (d.txt)
 	{		
-		temp = int64ToIntS(vsapi->propGetInt(in, "cx", 0, &err));
+		temp = int64ToIntS(vsapi->mapGetInt(in, "cx", 0, &err));
 		if (err)
 			d.cx = 20;
 		else if (abs(temp) < 2 && abs(temp) > d.avi->width / 8)
 		{
-			vsapi->setError(out, "F2QCorr: absolute values of cx must be between 2 and 1/8 frame wwidth");
+			vsapi->mapSetError(out, "F2QCorr: absolute values of cx must be between 2 and 1/8 frame wwidth");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 		else
 			d.cx = abs(temp);
-		temp = int64ToIntS(vsapi->propGetInt(in, "cy", 0, &err));
+		temp = int64ToIntS(vsapi->mapGetInt(in, "cy", 0, &err));
 		if (err)
 			d.cy = d.cx <= d.avi->height / 8 ? d.cx : d.avi->height / 8;
 		else if (abs(temp) < 2 && abs(temp) > d.avi->height / 8)
 		{
-			vsapi->setError(out, "F2QCorr: absolute values of cy must be between 2 and 1/8 frame height");
+			vsapi->mapSetError(out, "F2QCorr: absolute values of cy must be between 2 and 1/8 frame height");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
@@ -558,43 +546,43 @@ static void VS_CC f2qcorrCreate(const VSMap *in, VSMap *out, void *userData, VSC
 		else
 			d.cy = abs(temp);
 
-		d.sf = int64ToIntS(vsapi->propGetInt(in, "sf", 0, &err));
+		d.sf = int64ToIntS(vsapi->mapGetInt(in, "sf", 0, &err));
 		if (err)
 			d.sf = 0;
 		else if (d.sf < 0 || d.sf >= d.avi->numFrames - 1)
 		{
-			vsapi->setError(out, "F2QCorr: sf must be within clip");
+			vsapi->mapSetError(out, "F2QCorr: sf must be within clip");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
-		d.ef = int64ToIntS(vsapi->propGetInt(in, "ef", 0, &err));
+		d.ef = int64ToIntS(vsapi->mapGetInt(in, "ef", 0, &err));
 		if (err)
 			d.ef = d.avi->numFrames - 1;
 		else if (d.ef < d.sf || d.ef >= d.avi->numFrames)
 		{
-			vsapi->setError(out, "F2QCorr: ef must not be less than sf and must be within clip");
+			vsapi->mapSetError(out, "F2QCorr: ef must not be less than sf and must be within clip");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 
 		temp = d.ef - d.sf <= 1000 ? 1 : (d.ef - d.sf) / 1000 + 1;
-		d.every = int64ToIntS(vsapi->propGetInt(in, "every", 0, &err));
+		d.every = int64ToIntS(vsapi->mapGetInt(in, "every", 0, &err));
 		if (err)
 			d.every = temp;
 		else if (d.every < temp || d.every >= d.ef - d.sf)
 		{
-			vsapi->setError(out, "F2QCorr: every should not result in either zero or over 1000 records");
+			vsapi->mapSetError(out, "F2QCorr: every should not result in either zero or over 1000 records");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 	
-		const char * fn = vsapi->propGetData(in, "filename", 0, &err);
+		const char * fn = vsapi->mapGetData(in, "filename", 0, &err);
 		if (err)
 		{
-			vsapi->setError(out, "F2QCorr: valid File name with full path must be specified");
+			vsapi->mapSetError(out, "F2QCorr: valid File name with full path must be specified");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
@@ -609,7 +597,18 @@ static void VS_CC f2qcorrCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	data = (F2QCorrData *)malloc(sizeof(d));
 	*data = d;
 
-	vsapi->createFilter(in, out, "F2QCorr", f2qcorrInit, f2qcorrGetFrame, f2qcorrFree, fmParallelRequests, 0, data, core);
+	f2qcorrInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[2];
+	int ndeps = 0;
+	for (int i = 0; i < 2; i++)
+		if (data->node[i] != NULL)
+			deps[ndeps++] = { data->node[i], rpGeneral };
+	vsapi->createVideoFilter(out, "F2QCorr", &data->vi, f2qcorrGetFrame, f2qcorrFree, fmParallelRequests, deps, ndeps, data, core);
 }
 
 //registerFunc("fqCorr", "clip:clip;bclip:clip;cx:int:opt;cy:int:opt;

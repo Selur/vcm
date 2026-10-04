@@ -226,7 +226,7 @@ void dePepper(finc * dp, int dpitch, const finc *sp, int spitch,
 }
 //----------------------------------------------------------------------------------
 typedef struct {
-				VSNodeRef *node;
+				VSNode *node;
 				const VSVideoInfo *vi;
 				int planes[3];	//1 for de salt,2 for de pepper, 3 for both de salt & pepper
 				int tol;			// tolerance				
@@ -237,12 +237,9 @@ typedef struct {
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC saltpepperInit
-				(VSMap *in, VSMap *out, void **instanceData, 
-				VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void saltpepperInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     SaltPepperData *d = (SaltPepperData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 	
 }
 	
@@ -257,12 +254,11 @@ static void VS_CC saltpepperInit
 // upstream filters.
 // Once all frames are ready the the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC saltpepperGetFrame
-				(int n, int activationReason, void **instanceData, 
+static const VSFrame *VS_CC saltpepperGetFrame
+				(int n, int activationReason, void *instanceData, 
 				void **frameData, VSFrameContext *frameCtx, 
-				VSCore *core, const VSAPI *vsapi)
-{
-    SaltPepperData *d = (SaltPepperData *) * instanceData;
+				VSCore *core, const VSAPI *vsapi) {
+    SaltPepperData *d = (SaltPepperData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -271,11 +267,11 @@ static const VSFrameRef *VS_CC saltpepperGetFrame
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 	 
@@ -283,7 +279,7 @@ static const VSFrameRef *VS_CC saltpepperGetFrame
         // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
         // supply the "dominant" source frame to copy properties from. Frame props
         // are an essential part of the filter chain and you should NEVER break it.
-        VSFrameRef *dst = vsapi->copyFrame(src, core);
+        VSFrame *dst = vsapi->copyFrame(src, core);
 
         // It's processing loop time!
         // Loop over all the planes
@@ -361,7 +357,7 @@ static const VSFrameRef *VS_CC saltpepperGetFrame
 				float * dp = (float *) dstp;
 				const float *sp = (float *)srcp;
 				float min, max; 
-				if(	fi ->colorFamily == cmRGB )
+				if(	fi ->colorFamily == cfRGB )
 				{
 					min = 0.0; 
 					max = 1.0;
@@ -428,17 +424,11 @@ static void VS_CC saltpepperCreate(const VSMap *in,
     int err;
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // Note that
     // vi->format can be 0 if the input clip can change format midstream.
-	if (d.vi->format->colorFamily == cmCompat)
-	{
-		vsapi->setError(out, "saltPepper: Compat format not allowed.");
-		vsapi->freeNode(d.node);
-		return;
-	}
 	
 
     // If a property read fails for some reason (index out of bounds/wrong type)
@@ -449,7 +439,7 @@ static void VS_CC saltpepperCreate(const VSMap *in,
     // And when it's not set we want it to default to enabled.
     for( int i = 0; i < 3; i ++)
 	{
-		d.planes[i] = vsapi->propGetInt(in, "planes", i, &err);
+		d.planes[i] = vsapi->mapGetInt(in, "planes", i, &err);
 
 		if (err)
 			d.planes[i] = 3;	// both salt and pepper
@@ -457,19 +447,19 @@ static void VS_CC saltpepperCreate(const VSMap *in,
 		// the only allowed 
 		if (d.planes[i] < 0 || d.planes[i] > 3 ) 
 		{
-			vsapi->setError(out, "saltPepper: planes array  can have values of 0 to 3 only. 0 for no process, 1 for salt only, 2 for pepper only and 3 for both ");
+			vsapi->mapSetError(out, "saltPepper: planes array  can have values of 0 to 3 only. 0 for no process, 1 for salt only, 2 for pepper only and 3 for both ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
-	if(d.planes[0] == 0 && d.planes[1] == 0 && d.planes[2] == 0 || (d.vi->format->colorFamily == cmGray && d.planes[0] == 0) )
+	if(d.planes[0] == 0 && d.planes[1] == 0 && d.planes[2] == 0 || (d.vi->format.colorFamily == cfGray && d.planes[0] == 0) )
 	{
-			vsapi->setError(out, "saltPepper: all planes have values of 0. At least one plane must be non zero with a valid value.");
+			vsapi->mapSetError(out, "saltPepper: all planes have values of 0. At least one plane must be non zero with a valid value.");
 			vsapi->freeNode(d.node);
 			return;
 	}
 
-	d.tol = vsapi->propGetInt(in, "tol", 0, &err);
+	d.tol = vsapi->mapGetInt(in, "tol", 0, &err);
 
     if (err)
         d.tol = 3;	// both salt and pepper
@@ -477,13 +467,13 @@ static void VS_CC saltpepperCreate(const VSMap *in,
     // the only allowed 
     if (d.tol < 0 || d.tol > 5 ) 
 	{
-        vsapi->setError(out, "saltPepper: tol can have value of 0 to 5");
+        vsapi->mapSetError(out, "saltPepper: tol can have value of 0 to 5");
         vsapi->freeNode(d.node);
         return;
 	}
 
 	
-	temp = !!vsapi->propGetInt(in, "avg", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "avg", 0, &err);
 
     if (err)
         d.avg = true;
@@ -491,7 +481,7 @@ static void VS_CC saltpepperCreate(const VSMap *in,
     // the only allowed values 
     if (temp < 0 || temp > 1 ) 
 	{
-        vsapi->setError(out, "saltPepper: avg can have a value of 0 or 1 only");
+        vsapi->mapSetError(out, "saltPepper: avg can have a value of 0 or 1 only");
         vsapi->freeNode(d.node);
         return;
 	}
@@ -514,14 +504,22 @@ static void VS_CC saltpepperCreate(const VSMap *in,
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters fmParallelRequests is usually easier to achieve as an
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If you filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "saltPepper", saltpepperInit, 
-								saltpepperGetFrame, saltpepperFree, 
-								fmParallel, 0, data, core);
+    saltpepperInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "saltPepper", data->vi, saltpepperGetFrame, saltpepperFree, fmParallel, deps, ndeps, data, core);
     return;
 }
 
