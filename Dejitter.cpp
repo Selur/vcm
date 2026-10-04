@@ -298,7 +298,8 @@ typedef struct {
 			vsapi->freeNode(d.node);
 			return;
 		}
-		d.jmax = temp;
+		else
+			d.jmax = temp;	// was assigned unconditionally: without jmax the default became 0 and no row was ever corrected
 
 		temp = int64ToIntS(vsapi->mapGetInt(in, "wsyn", 0, &err));
 

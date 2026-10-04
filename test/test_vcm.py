@@ -189,6 +189,27 @@ def main():
         run("StepFilter" + tag, lambda: v.StepFilter(src), src, changes=False)
         run("Circles" + tag, lambda: v.Circles(src), src)
 
+    # DeJitter moves rows that start with dark pixels back to the left edge: a clip whose rows
+    # start 6 dark samples late must come back as the original (apart from the blackened row end),
+    # with the default jmax as well as with an explicit one.
+    for fmt in (vs.GRAY8, vs.YUV444P8, vs.YUV444P16, vs.GRAYS, vs.RGB24):
+        f = core.get_video_format(fmt)
+        name = f.name
+        floor = 0.2 if f.sample_type == vs.FLOAT else int(0.2 * ((1 << f.bits_per_sample) - 1))
+        # no dark samples in the planes DeJitter looks at, so every row start is found
+        bright = core.std.Expr(noise_clip(fmt), ["x %s max" % floor] + ([""] * (f.num_planes - 1) if f.color_family == vs.YUV else []))
+        late = core.std.Crop(core.std.AddBorders(bright, left=6), right=6)
+
+        def restored(clip):
+            a = core.std.Crop(clip, right=8)
+            b = core.std.Crop(bright, right=8)
+            return all(fr.props["PlaneStatsDiff"] == 0 for p in range(f.num_planes)
+                       for fr in core.std.PlaneStats(a, b, plane=p).frames())
+
+        check(not restored(late), "DeJitter %s: the shifted clip differs from the original" % name)
+        check(restored(v.DeJitter(late, wsyn=0)), "DeJitter %s: default jmax restores the rows" % name)
+        check(restored(v.DeJitter(late, jmax=20, wsyn=0)), "DeJitter %s: jmax=20 restores the rows" % name)
+
     # source filter
     box = run("ColorBox", lambda: v.ColorBox())
     check(box is not None and box.format.id == vs.YUV444P8 and box.width > 0, "ColorBox default is YUV444P8")
