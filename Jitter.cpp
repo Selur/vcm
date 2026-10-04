@@ -385,6 +385,8 @@ static void VS_CC jitterCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	else
 		d.stat = true;
 
+	d.speed = 2;	// init() reads it for type 2 even when stat is not set
+
 	if (d.stat)
 	{
 		const char * speed = vsapi->mapGetData(in, "speed", 0, &err);
