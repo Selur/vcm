@@ -28,7 +28,7 @@ Created sep 2014, 9 july 2020
 #include "GridHelper.cpp"
 
 typedef struct {
-    VSNodeRef *node;
+    VSNode *node;
     const VSVideoInfo *vi;
 
 	int gridinterval;
@@ -41,10 +41,9 @@ typedef struct {
 /***************************************************************/
 
 
-static void VS_CC gridInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void gridInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     GridData *d = (GridData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 	
 	
 }
@@ -55,9 +54,8 @@ static void VS_CC gridInit(VSMap *in, VSMap *out, void **instanceData, VSNode *n
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC gridGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    GridData *d = (GridData *) * instanceData;
+static const VSFrame *VS_CC gridGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    GridData *d = (GridData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -66,18 +64,18 @@ static const VSFrameRef *VS_CC gridGetFrame(int n, int activationReason, void **
     } 
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 
 		uint8_t color[] = { 0,0,0 }, bcolor[] = { 0,0,0 }, vbcolor[] = { 0, 0, 0 };
 		//	uint8_t yuvvalue [3], byuvvalue[3], vbyuvvalue[3];		
 
-		if (fi->colorFamily == cmRGB)
+		if (fi->colorFamily == cfRGB)
 		{
 			getComponentsRGB( color, d->color);
 			getComponentsRGB( bcolor, d->bcolor);
@@ -85,7 +83,7 @@ static const VSFrameRef *VS_CC gridGetFrame(int n, int activationReason, void **
 		
 		}
 
-		else if( fi->colorFamily == cmYUV)
+		else if( fi->colorFamily == cfYUV)
 		{
 			getYUVfromRGB(color, d->color);
 			getYUVfromRGB(bcolor, d->bcolor);
@@ -95,7 +93,7 @@ static const VSFrameRef *VS_CC gridGetFrame(int n, int activationReason, void **
 		 // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
         // supply the "dominant" source frame to copy properties from. Frame props
         // are an essential part of the filter chain and you should NEVER break it.
-        VSFrameRef *dst = vsapi->newVideoFrame(fi, width, height, src, core);
+        VSFrame *dst = vsapi->newVideoFrame(fi, width, height, src, core);
 
         // It's processing loop time!
         // Loop over all the planes
@@ -111,11 +109,11 @@ static const VSFrameRef *VS_CC gridGetFrame(int n, int activationReason, void **
 			int bwd = vsapi->getFrameWidth(src, plane);
 
 			// copy input on to output frame (RGB and YUY2. Planar U and V will do later)
-			vs_bitblt(dstp, spitch, srcp, spitch, bwd * fi->bytesPerSample, bht);
+			bitblt(dstp, spitch, srcp, spitch, bwd * fi->bytesPerSample, bht);
 
-			int subW = plane == 0 ? 0 : fi->colorFamily == cmYUV ? fi->subSamplingW : 0;
+			int subW = plane == 0 ? 0 : fi->colorFamily == cfYUV ? fi->subSamplingW : 0;
 
-			int subH = plane == 0 ? 0 : fi->colorFamily == cmYUV ? fi->subSamplingH : 0;
+			int subH = plane == 0 ? 0 : fi->colorFamily == cfYUV ? fi->subSamplingH : 0;
 
 			// for drawing bold and very bold lines
 
@@ -352,67 +350,67 @@ static void VS_CC gridCreate(const VSMap *in, VSMap *out, void *userData, VSCore
 	int temp[3];
 	int m;
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // In this integer and float. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-   // if (!isConstantFormat(d.vi) ) // || d.vi->format->sampleType != stInteger || d.vi->format->bitsPerSample != 8)
+   // if (!isConstantVideoFormat(d.vi) ) // || d.vi->format.sampleType != stInteger || d.vi->format.bitsPerSample != 8)
 	
 
-	d.gridinterval = vsapi->propGetInt(in, "lineint", 0, &err);
+	d.gridinterval = vsapi->mapGetInt(in, "lineint", 0, &err);
 
 	if (err)
 		d.gridinterval = 10;
 
 	if (d.gridinterval < 4 || d.gridinterval > 100)
 	{
-		vsapi->setError(out, "Grid: lineint can have values between 4 and 100 only ");
+		vsapi->mapSetError(out, "Grid: lineint can have values between 4 and 100 only ");
         vsapi->freeNode(d.node);
         return;
 	}
-	d.bold = vsapi->propGetInt(in, "bold", 0, &err);
+	d.bold = vsapi->mapGetInt(in, "bold", 0, &err);
 
 	if (err)
 		d.bold = 5;
 
 	if (d.bold < 1 )
 	{
-		vsapi->setError(out, "Grid: bold can he a number 1 or more ");
+		vsapi->mapSetError(out, "Grid: bold can he a number 1 or more ");
         vsapi->freeNode(d.node);
         return;
 	}
-	d.vbold = vsapi->propGetInt(in, "vbold", 0, &err);
+	d.vbold = vsapi->mapGetInt(in, "vbold", 0, &err);
 
 	if (err)
 		d.vbold = 2;
 
 	if (d.vbold < 1 )
 	{
-		vsapi->setError(out, "Grid: vbold must be anuber 1 or more ");
+		vsapi->mapSetError(out, "Grid: vbold must be anuber 1 or more ");
         vsapi->freeNode(d.node);
         return;
 	}
 
-	d.color = vsapi->propGetInt(in, "color", 0, &err);
+	d.color = vsapi->mapGetInt(in, "color", 0, &err);
 
 	if (err)
 		d.color = 0;
 
 	else
 	{
-		m = vsapi->propNumElements(in, "color");
+		m = vsapi->mapNumElements(in, "color");
 		temp[0] = 0;
 		temp[1] = 0;
 		temp[2] = 0;
 
 		for ( int i = 0; i < m; i ++)
 		{
-			temp[i] = vsapi->propGetInt(in, "color", i, &err);
+			temp[i] = vsapi->mapGetInt(in, "color", i, &err);
 
 			if ( temp[i] < 0 || temp[i] > 255)
 			{
-				vsapi->setError(out, "Grid: color parameter values must be between 0 and 255 ");
+				vsapi->mapSetError(out, "Grid: color parameter values must be between 0 and 255 ");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -422,25 +420,25 @@ static void VS_CC gridCreate(const VSMap *in, VSMap *out, void *userData, VSCore
 	}
 
 
-	d.bcolor = vsapi->propGetInt(in, "bcolor", 0, &err);
+	d.bcolor = vsapi->mapGetInt(in, "bcolor", 0, &err);
 
 	if (err)
 		d.bcolor = d.color;
 
 	else
 	{
-		m = vsapi->propNumElements(in, "bcolor");
+		m = vsapi->mapNumElements(in, "bcolor");
 		temp[0] = 0;
 		temp[1] = 0;
 		temp[2] = 0;
 
 		for ( int i = 0; i < m; i ++)
 		{
-			temp[i] = vsapi->propGetInt(in, "bcolor", i, &err);
+			temp[i] = vsapi->mapGetInt(in, "bcolor", i, &err);
 
 			if ( temp[i] < 0 || temp[i] > 255)
 			{
-				vsapi->setError(out, "Grid: bcolor parameter values must be between 0 and 255 ");
+				vsapi->mapSetError(out, "Grid: bcolor parameter values must be between 0 and 255 ");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -449,25 +447,25 @@ static void VS_CC gridCreate(const VSMap *in, VSMap *out, void *userData, VSCore
 		d.bcolor = (((temp[0] << 16 ) | temp[1] << 8 ) | temp[2]);
 	} 
 
-	d.vbcolor = vsapi->propGetInt(in, "vbcolor", 0, &err);
+	d.vbcolor = vsapi->mapGetInt(in, "vbcolor", 0, &err);
 
 	if (err)
 		d.vbcolor = d.bcolor;
 
 	else
 	{
-		m = vsapi->propNumElements(in, "vbcolor");
+		m = vsapi->mapNumElements(in, "vbcolor");
 		temp[0] = 0;
 		temp[1] = 0;
 		temp[2] = 0;
 
 		for ( int i = 0; i < m; i ++)
 		{
-			temp[i] = vsapi->propGetInt(in, "vbcolor", i, &err);
+			temp[i] = vsapi->mapGetInt(in, "vbcolor", i, &err);
 
 			if ( temp[i] < 0 || temp[i] > 255)
 			{
-				vsapi->setError(out, "Grid: vbcolor parameter values must be between 0 and 255 ");
+				vsapi->mapSetError(out, "Grid: vbcolor parameter values must be between 0 and 255 ");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -476,14 +474,14 @@ static void VS_CC gridCreate(const VSMap *in, VSMap *out, void *userData, VSCore
 		d.vbcolor = (((temp[0] << 16 ) | temp[1] << 8 ) | temp[2]);
 	}	
 
-	d.style = vsapi->propGetInt(in, "style", 0, &err);
+	d.style = vsapi->mapGetInt(in, "style", 0, &err);
 
 	if (err)
 		d.style = 0;
 
 	if (d.style < 0 || d.style  > 2)
 	{
-		vsapi->setError(out, "Grid: style can have values between 0 for Left Top origin grid, 1 for frame centered grid and 2 for centred rulers only ");
+		vsapi->mapSetError(out, "Grid: style can have values between 0 for Left Top origin grid, 1 for frame centered grid and 2 for centred rulers only ");
         vsapi->freeNode(d.node);
         return;
 	}
@@ -505,12 +503,22 @@ static void VS_CC gridCreate(const VSMap *in, VSMap *out, void *userData, VSCore
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "Grid", gridInit, gridGetFrame, gridFree, fmParallel, 0, data, core);
+    gridInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "Grid", data->vi, gridGetFrame, gridFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

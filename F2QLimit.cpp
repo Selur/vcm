@@ -36,7 +36,7 @@ see <http://www.gnu.org/licenses/>.
 #include "F2QuiverSpectralDisplay.h"
 */
 typedef struct {
-		VSNodeRef *node;
+		VSNode *node;
 		const VSVideoInfo *vi;
 		
 		int	fspec[60];
@@ -70,12 +70,11 @@ void applyLimits(F2QLimitData* d, int i);
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC f2qlimitInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void f2qlimitInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     F2QLimitData *d = (F2QLimitData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);	
 
-	int * facbuf =  vs_aligned_malloc<int> (sizeof(int) * 64, 32);	//maximum 64 factors, first is factor, second is dividend to be factored. At 
+	int * facbuf =  vsh_aligned_malloc<int> (sizeof(int) * 64, 32);	//maximum 64 factors, first is factor, second is dividend to be factored. At 
 								
 				
 	// make sure we have even numbers as starting values of width and height
@@ -85,7 +84,7 @@ static void VS_CC f2qlimitInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 	d->wbest = getBestDim(wdEven + ADDSAFE, facbuf);
 	d->hbest = getBestDim(htEven + ADDSAFE, facbuf);
 
-	vs_aligned_free(facbuf);
+	vsh_aligned_free(facbuf);
 	
 	d->frqwidth = (d->wbest / 2) + 1;
 	int f2qsize = d->hbest * d->frqwidth;
@@ -107,17 +106,15 @@ static void VS_CC f2qlimitInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 			{
 				if (xtrue && ytrue)
 				{
-					vsapi->setError(out, "F2QLimit: search area includes origin");
+					vsapi->mapSetError(out, "F2QLimit: search area includes origin");
 					vsapi->freeNode(d->node);					
-					free(d);
 					return;
 				}
 			}
 			else if (xtrue || ytrue)
 			{
-				vsapi->setError(out, "F2QLimit: search area includes axis");
+				vsapi->mapSetError(out, "F2QLimit: search area includes axis");
 				vsapi->freeNode(d->node);
-				free(d);
 				return;
 			}
 
@@ -128,45 +125,51 @@ static void VS_CC f2qlimitInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 
 	if (!ok)
 	{
-		vsapi->setError(out, "F2QLimit: could not load any of the fft dll or get required fnctions");
+		vsapi->mapSetError(out, "F2QLimit: could not load any of the fft dll or get required fnctions");
 		if (d->hinstLib != NULL)
 			FreeLibrary(d->hinstLib);
 		vsapi->freeNode(d->node);
 		return;
 	}
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
-	
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
-	
 
-	if(d->inBuf == NULL || d->outBuf == NULL )
 	{
-		vsapi->setError(out, "F2QLimit: unexpectedly buffers not allocated error");
-		vsapi->freeNode(d->node);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
+
+		std::lock_guard<std::mutex> guard(g_mutex);
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
+
+		if (d->inBuf != NULL)
+		{
+
+			d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
+			if (d->outBuf == NULL)
+				d->fftwf_free(d->inBuf);
+		}
+
+		if (d->inBuf == NULL || d->outBuf == NULL)
+		{
+			vsapi->mapSetError(out, "F2QLimit: unexpectedly buffers not allocated error");
+			vsapi->freeNode(d->node);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			return;
+		}
+
+
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+
+		if (d->pf == NULL || d->pinv == NULL)
+		{
+			vsapi->mapSetError(out, "F2QLimit: unexpected  fft plans  error");
+			vsapi->freeNode(d->node);
+			d->fftwf_free(d->inBuf);
+			d->fftwf_free(d->outBuf);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			return;
+		}
 	}
-	
-
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE );
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE );
-
-	if(  d->pf == NULL || d->pinv == NULL)
-	{
-		vsapi->setError(out, "F2QLimit: unexpected  fft plans  error");
-		vsapi->freeNode(d->node);
-		d->fftwf_free(d->inBuf);
-		d->fftwf_free(d->outBuf);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
-	}
-	
-
 	
 }
 //-----------...........................................
@@ -246,10 +249,9 @@ void applyLimits(F2QLimitData* d, int nf)
 //......................................................................
 
 //---------------------------------------------------------------------------------------------------------------------------
-static const VSFrameRef *VS_CC f2qlimitGetFrame(int n, int activationReason, void **instanceData, 
-						void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    F2QLimitData *d = (F2QLimitData *) * instanceData;
+static const VSFrame *VS_CC f2qlimitGetFrame(int n, int activationReason, void *instanceData, 
+						void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    F2QLimitData *d = (F2QLimitData *)instanceData;
 
     if (activationReason == arInitial) {
         // Request the source frame on the first call
@@ -257,17 +259,17 @@ static const VSFrameRef *VS_CC f2qlimitGetFrame(int n, int activationReason, voi
     } 
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int ht = vsapi->getFrameHeight(src, 0);
         int wd = vsapi->getFrameWidth(src, 0);
-        VSFrameRef *dst = vsapi->copyFrame(src, core);
+        VSFrame *dst = vsapi->copyFrame(src, core);
 		
 		// process all of RGB and Y of YUV or Gray
-        int np = fi->colorFamily == cmRGB ? 3 : 1;
+        int np = fi->colorFamily == cfRGB ? 3 : 1;
 		int nbits = fi->sampleType == stInteger ? fi->bitsPerSample : 0;
 		int nbytes = fi->bytesPerSample;
 
@@ -335,69 +337,69 @@ static void VS_CC f2qlimitCreate(const VSMap *in, VSMap *out, void *userData, VS
     F2QLimitData d;
     F2QLimitData *data;
     int err;
-	int temp;
+	//int temp;
 	
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
    
-	if (!isConstantFormat(d.vi) && (d.vi->format->colorFamily != cmRGB 
-						&& d.vi->format->colorFamily != cmYUV 	
-						&& d.vi->format->colorFamily != cmGray))
+	if (!isConstantVideoFormat(d.vi) && (d.vi->format.colorFamily != cfRGB 
+						&& d.vi->format.colorFamily != cfYUV 	
+						&& d.vi->format.colorFamily != cfGray))
 	{
-        vsapi->setError(out, "F2QLimit: only constant format RGB YUV or Gray  input supported");
+        vsapi->mapSetError(out, "F2QLimit: only constant format RGB YUV or Gray  input supported");
         vsapi->freeNode(d.node);
         return;
     }
 	
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "F2QLimit: Half float formats not allowed ");
+		vsapi->mapSetError(out, "F2QLimit: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
 		
-	d.grid = int64ToIntS(vsapi->propGetInt(in, "grid", 0, &err));
+	d.grid = int64ToIntS(vsapi->mapGetInt(in, "grid", 0, &err));
 	if (err)
 		d.grid = 10;
 	else if (d.grid < 1 || d.grid > 50)
 	{
-		vsapi->setError(out, "F2QLimit: grid specifies search area and be 1 to 50 only");
+		vsapi->mapSetError(out, "F2QLimit: grid specifies search area and be 1 to 50 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.inner = int64ToIntS(vsapi->propGetInt(in, "inner", 0, &err));
+	d.inner = int64ToIntS(vsapi->mapGetInt(in, "inner", 0, &err));
 	if (err)
 		d.inner = d.grid / 10;
 	else if (d.inner < 0 || d.inner > d.grid )
 	{
-		vsapi->setError(out, "F2QLimit: inner area of limiting can be 0 to value of grid only");
+		vsapi->mapSetError(out, "F2QLimit: inner area of limiting can be 0 to value of grid only");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.warn = int64ToIntS(vsapi->propGetInt(in, "warn", 0, &err));
+	d.warn = int64ToIntS(vsapi->mapGetInt(in, "warn", 0, &err));
 	if (err)
 		d.warn = 1;
 	else if (d.warn < 0 || d.warn > 2)
 	{
-		vsapi->setError(out, "F2QLimit: warn level can be 0 or 1 or 2 only");
+		vsapi->mapSetError(out, "F2QLimit: warn level can be 0 or 1 or 2 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.npoints = vsapi->propNumElements(in, "fspec");
+	d.npoints = vsapi->mapNumElements(in, "fspec");
 
 	if(d.npoints < 3 || (d.npoints % 3 ) != 0 || d.npoints > 60)
 	{		
-		vsapi->setError(out, "F2QLimit: fspec at least one and upto 20 filter specifications be given. Each filter is specified as a set of 5 integer values.");
+		vsapi->mapSetError(out, "F2QLimit: fspec at least one and upto 20 filter specifications be given. Each filter is specified as a set of 5 integer values.");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
 	for ( int i = 0; i < d.npoints; i ++)
-		d.fspec[i] = int64ToIntS(vsapi->propGetInt(in, "fspec", i, 0));
+		d.fspec[i] = int64ToIntS(vsapi->mapGetInt(in, "fspec", i, 0));
 	
 	for (int i = 0; i < d.npoints; i += 3)
 	{		
@@ -407,20 +409,20 @@ static void VS_CC f2qlimitCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 		if (d.fspec[i] < 0 || d.fspec[i] >= NYQUIST / 2 )
 		{
-			vsapi->setError(out, "F2QLimit:the first number horizontal freq of each filter must  be from 0 to nyquist / 2 here  250");
+			vsapi->mapSetError(out, "F2QLimit:the first number horizontal freq of each filter must  be from 0 to nyquist / 2 here  250");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		if (d.fspec[i + 1] < - NYQUIST / 2 || d.fspec[i + 1] >= NYQUIST /2)
 		{
-			vsapi->setError(out, "F2QLimit:the second number vertical freq of each filter must be -nyqiust/2 to nyquist / 2 here -250 to 250");
+			vsapi->mapSetError(out, "F2QLimit:the second number vertical freq of each filter must be -nyqiust/2 to nyquist / 2 here -250 to 250");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
 		if (d.fspec[i + 2] < 0 || d.fspec[i + 2] > 99)
 		{
-			vsapi->setError(out, "F2QLimit:the third number  specifying freq1 of each filter must be between 0 and %d");
+			vsapi->mapSetError(out, "F2QLimit:the third number  specifying freq1 of each filter must be between 0 and %d");
 			vsapi->freeNode(d.node);
 			return;
 
@@ -430,7 +432,17 @@ static void VS_CC f2qlimitCreate(const VSMap *in, VSMap *out, void *userData, VS
     data = (F2QLimitData *) malloc(sizeof(d));
     *data = d;
 	
-	vsapi->createFilter(in, out, "F2QLimit", f2qlimitInit, f2qlimitGetFrame, f2qlimitFree, fmParallelRequests, 0, data, core);
+	f2qlimitInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "F2QLimit", data->vi, f2qlimitGetFrame, f2qlimitFree, fmParallelRequests, deps, ndeps, data, core);
 }
 
 

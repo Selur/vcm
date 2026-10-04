@@ -10,7 +10,7 @@ Last modified on 26 Aug 2017, 22 Aug 2020
 
 typedef struct {
 
-					VSNodeRef *node;
+					VSNode *node;
 					const VSVideoInfo *vi;
 					bool edge;	//  pass, edge
 					int span;		//  (wavelength  of noise)  pixels along x axis		
@@ -40,8 +40,8 @@ void FanFilterPlane(finc * op, int opitch,
 
 	for (int h = 0; h < bht; h++)
 	{
-
-		int kbw = kb * span2;
+		// op already points at column span2, so the central value of column w is op[kbw]
+		int kbw = 0;
 		// span is odd number
 		
 
@@ -110,12 +110,9 @@ void FanFilterPlane(finc * op, int opitch,
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC fanInit
-(VSMap *in, VSMap *out, void **instanceData,
-VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void fanInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	FanData *d = (FanData *)* instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 }
 
 //---------------------------------------------------------------------------------	
@@ -127,12 +124,11 @@ VSNode *node, VSCore *core, const VSAPI *vsapi)
 // upstream filters.
 // Once all frames are ready the the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC fanGetFrame
-(int n, int activationReason, void **instanceData,
+static const VSFrame *VS_CC fanGetFrame
+(int n, int activationReason, void *instanceData,
 void **frameData, VSFrameContext *frameCtx,
-VSCore *core, const VSAPI *vsapi)
-{
-	FanData *d = (FanData *)* instanceData;
+VSCore *core, const VSAPI *vsapi) {
+	FanData *d = (FanData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -141,11 +137,11 @@ VSCore *core, const VSAPI *vsapi)
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat *fi = d->vi->format;
+		const VSVideoFormat *fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
 		int width = vsapi->getFrameWidth(src, 0);
 
@@ -153,7 +149,7 @@ VSCore *core, const VSAPI *vsapi)
 		// When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
 		// supply the "dominant" source frame to copy properties from. Frame props
 		// are an essential part of the filter chain and you should NEVER break it.
-		VSFrameRef * dst = vsapi->copyFrame(src, core);
+		VSFrame * dst = vsapi->copyFrame(src, core);
 
 		// It's processing loop time!
 		// Loop over all the planes
@@ -175,7 +171,7 @@ VSCore *core, const VSAPI *vsapi)
 		//	env->BitBlt(dp, dst_stride, srcp, src_stride, bwd * samplesize, bht);
 
 			// do not process A
-			if (plane == 3 || (plane > 0 && ! d->yuv && fi->colorFamily == cmYUV) ) continue;
+			if (plane == 3 || (plane > 0 && ! d->yuv && fi->colorFamily == cfYUV) ) continue;
 
 			if (fi->sampleType == stInteger)
 			{
@@ -235,16 +231,11 @@ static void VS_CC fanCreate(const VSMap *in,
 	int err;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 
 	// Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (d.vi->format->colorFamily == cmCompat) {
-		vsapi->setError(out, "AdaptiveMedian: Compat format input not accepted.");
-		vsapi->freeNode(d.node);
-		return;
-	}
 
 
 	// If a property read fails for some reason (index out of bounds/wrong type)
@@ -254,24 +245,24 @@ static void VS_CC fanCreate(const VSMap *in,
 	// this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
 
-	d.span = vsapi->propGetInt(in, "span", 0, &err);
+	d.span = vsapi->mapGetInt(in, "span", 0, &err);
 
 	if (err)
 		d.span = 5;
 	else if (d.span < 3 || d.span > 51 || (d.span & 1) == 0)
 	{
-		vsapi->setError(out, "fan: span value can be an odd number between 3 and 51 only");
+		vsapi->mapSetError(out, "fan: span value can be an odd number between 3 and 51 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	temp = vsapi->propGetInt(in, "edge", 0, &err);
+	temp = vsapi->mapGetInt(in, "edge", 0, &err);
 
 	if (err)
 		d.edge = true;
 	else if (temp < 0 || temp > 1)
 	{
-		vsapi->setError(out, "fan: edge value can be 0 or 1 only");
+		vsapi->mapSetError(out, "fan: edge value can be 0 or 1 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -280,13 +271,13 @@ static void VS_CC fanCreate(const VSMap *in,
 		d.edge = temp == 0 ? false : true;
 	}
 
-	temp = vsapi->propGetInt(in, "uv", 0, &err);
+	temp = vsapi->mapGetInt(in, "uv", 0, &err);
 
 	if (err)
 		d.yuv = true;
 	else if (temp < 0 || temp > 1)
 	{
-		vsapi->setError(out, "fan: uv value can be 0 or 1 only");
+		vsapi->mapSetError(out, "fan: uv value can be 0 or 1 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -295,21 +286,21 @@ static void VS_CC fanCreate(const VSMap *in,
 		d.yuv = temp == 0 ? false : true;
 	}
 
-	d.plustol = vsapi->propGetFloat(in, "plus", 0, &err);
+	d.plustol = vsapi->mapGetFloat(in, "plus", 0, &err);
 	if (err)
 		d.plustol = 0.02f;
 	else if (d.plustol < 0 ||d.plustol > 0.5f)
 	{
-		vsapi->setError(out, "fan: plustol can have a value between 0.0 and 0.5 only");
+		vsapi->mapSetError(out, "fan: plustol can have a value between 0.0 and 0.5 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.minustol = vsapi->propGetFloat(in, "minus", 0, &err);
+	d.minustol = vsapi->mapGetFloat(in, "minus", 0, &err);
 	if (err)
 		d.minustol = 0.02f;
 	else if (d.minustol < 0 || d.minustol > 0.5f)
 	{
-		vsapi->setError(out, "fan: minustol can have a value between 0.0 and 0.5 only");
+		vsapi->mapSetError(out, "fan: minustol can have a value between 0.0 and 0.5 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -326,14 +317,22 @@ static void VS_CC fanCreate(const VSMap *in,
 	// need to modify no shared data at all when the filter is running.
 	// For more complicated filters fmParallelRequests is usually easier to achieve as an
 	// be prefetched in parallel but the actual processing is serialized.
-	// The others can be considered special cases where fmSerial is useful to source filters and
+	// The others can be considered special cases where fmFrameState is useful to source filters and
 	// fmUnordered is useful when a filter's state may change even when deciding which frames to
 	// prefetch (such as a cache filter).
 	// If you filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "fan", fanInit,
-		fanGetFrame, fanFree,
-		fmParallel, 0, data, core);
+	fanInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "fan", data->vi, fanGetFrame, fanFree, fmParallel, deps, ndeps, data, core);
 	return;
 }
 

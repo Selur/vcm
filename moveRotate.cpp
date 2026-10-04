@@ -35,7 +35,7 @@
 */
 
 typedef struct {
-		 VSNodeRef *node[2];
+		 VSNode *node[2];
 		 const VSVideoInfo *vi[2];
 			
 		float dd;	// initial  angle of rotation
@@ -54,11 +54,9 @@ typedef struct {
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC rotateInit(VSMap *in, VSMap *out, void **instanceData,
-	VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void rotateInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     RotateData *d = (RotateData *) * instanceData;
-    vsapi->setVideoInfo(d->vi[0], 1, node);
 	
 		// set up all flags
 	d->lbuf = NULL;	
@@ -69,7 +67,7 @@ static void VS_CC rotateInit(VSMap *in, VSMap *out, void **instanceData,
 	{
 		d->span = 6;
 			//lanczos  opted 6 X 6 points per interpolation
-		d->lbuf = (float*) vs_aligned_malloc<float> ((d->pquant + 1) * d->span * sizeof(float), 32);		
+		d->lbuf = (float*) vsh_aligned_malloc<float> ((d->pquant + 1) * d->span * sizeof(float), 32);		
 
 		LanczosCoeff( d->lbuf, d->span, d->pquant);
 	}
@@ -79,7 +77,7 @@ static void VS_CC rotateInit(VSMap *in, VSMap *out, void **instanceData,
 		d->span = 4;
 			//cubic 4 X 4 opted or needed ht lanczos when we have only
 			//4 points available for interpolating a value
-		d->lbuf = (float*)vs_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
+		d->lbuf = (float*)vsh_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
 
 		CubicIntCoeff( d->lbuf, d->pquant);
 	}
@@ -88,7 +86,7 @@ static void VS_CC rotateInit(VSMap *in, VSMap *out, void **instanceData,
 	{
 		d->span = 2;
 
-		d->lbuf = (float*)vs_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
+		d->lbuf = (float*)vsh_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
 
 		LinearIntCoeff( d->lbuf, d->pquant);
 	}
@@ -106,8 +104,8 @@ static void VS_CC rotateInit(VSMap *in, VSMap *out, void **instanceData,
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC rotateGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    RotateData *d = (RotateData *) * instanceData;
+static const VSFrame *VS_CC rotateGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    RotateData *d = (RotateData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -118,19 +116,19 @@ static const VSFrameRef *VS_CC rotateGetFrame(int n, int activationReason, void 
     }
 	else if (activationReason == arAllFramesReady)
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi[0]->format;
+        const VSVideoFormat *fi = &d->vi[0]->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 
-		const VSFrameRef *bkg = vsapi->getFrameFilter(n, d->node[1], frameCtx);
+		const VSFrame *bkg = vsapi->getFrameFilter(n, d->node[1], frameCtx);
         // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
         // supply the "dominant" source frame to copy properties from. Frame props
         // are an essential part of the filter chain and you should NEVER break it.
-        VSFrameRef *dst = vsapi->copyFrame(bkg, core);	
+        VSFrame *dst = vsapi->copyFrame(bkg, core);	
 		
 		int subW[] = { 0, fi->subSamplingW, fi->subSamplingW, 0 };
 		int subH[] = { 0, fi->subSamplingH, fi->subSamplingH, 0 };
@@ -253,8 +251,8 @@ static const VSFrameRef *VS_CC rotateGetFrame(int n, int activationReason, void 
 									}
 									else		// floating pt samples
 									{
-										float min = plane == 0 ? 0.0 : fi->colorFamily == cmRGB ? 0.0 : -0.5f;
-										float max = plane == 0 ? 1.0 : fi->colorFamily == cmRGB ? 1.0 : 0.5f;
+										float min = plane == 0 ? 0.0 : fi->colorFamily == cfRGB ? 0.0 : -0.5f;
+										float max = plane == 0 ? 1.0 : fi->colorFamily == cfRGB ? 1.0 : 0.5f;
 										float * dp = (float *)dstp[plane];
 										const float * sp = (float *)srcp[plane];
 										if (needNotInterpolate(sp + inty * pitch + intx, pitch, 1))
@@ -342,7 +340,7 @@ static void VS_CC rotateFree(void *instanceData, VSCore *core, const VSAPI *vsap
 	vsapi->freeNode(d->node[1]);
 
 	if (d->lbuf != NULL)
-		vs_aligned_free(d->lbuf);
+		vsh_aligned_free(d->lbuf);
     free(d);
 }
 
@@ -353,26 +351,26 @@ static void VS_CC rotateCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     int err;
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node[0] = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node[0] = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi[0] = vsapi->getVideoInfo(d.node[0]);
 
     // In this first version we only want to handle 8bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isConstantFormat(d.vi[0] ) ) 
+    if (!isConstantVideoFormat(d.vi[0] ) ) 
 	{
-        vsapi->setError(out, "rotate: only constant format input supported");
+        vsapi->mapSetError(out, "rotate: only constant format input supported");
         vsapi->freeNode(d.node[0]);
         return;
     }
 
-	d.node[1] = vsapi->propGetNode(in, "bkg", 0, 0);
+	d.node[1] = vsapi->mapGetNode(in, "bkg", 0, 0);
     d.vi[1] = vsapi->getVideoInfo(d.node[1]);
 
     // In this first version we only want to handle 8bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isSameFormat(d.vi[0] , d.vi[1]))
+    if (!isSameVideoInfo(d.vi[0] , d.vi[1]))
 	{
-        vsapi->setError(out, "rotate: background clip bkg must have same format as main clip");
+        vsapi->mapSetError(out, "rotate: background clip bkg must have same format as main clip");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
@@ -383,71 +381,71 @@ static void VS_CC rotateCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     // strict checking because of what we wrote in the argument string, the only
     // reason this could fail is when the value wasn't set ht the user.
     // And when it's not set we want it to default to enabled.
-	d.dd = vsapi->propGetFloat(in, "angle", 0, 0);
+	d.dd = vsapi->mapGetFloat(in, "angle", 0, 0);
 
-	d.dinc = vsapi->propGetFloat(in, "dinc", 0, &err);
+	d.dinc = vsapi->mapGetFloat(in, "dinc", 0, &err);
 	if(err)
 	{
 		d.dinc = 0.0;
 	}
 
-	d.lx = vsapi->propGetInt(in, "lx", 0, &err);
+	d.lx = vsapi->mapGetInt(in, "lx", 0, &err);
 	if(err)
 		d.lx = 0;
 	if( d.lx < 0 || d.lx > d.vi[0]->width - 2)
 	{
-        vsapi->setError(out, "rotate: lx must be within clip and not more than frame width - 2");
+        vsapi->mapSetError(out, "rotate: lx must be within clip and not more than frame width - 2");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
     }
 
-	d.wd = vsapi->propGetInt(in, "wd", 0, &err);
+	d.wd = vsapi->mapGetInt(in, "wd", 0, &err);
 	if(err)
 		d.wd = d.vi[0]->width - d.lx;
 	if( d.wd < 2 || d.wd > d.vi[0]->width -  d.lx)
 	{
-        vsapi->setError(out, "rotate: wd must be atleast 2 and lx + wd within clip width");
+        vsapi->mapSetError(out, "rotate: wd must be atleast 2 and lx + wd within clip width");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
     }
-	d.ty = vsapi->propGetInt(in, "ty", 0, &err);
+	d.ty = vsapi->mapGetInt(in, "ty", 0, &err);
 	if(err)
 		d.ty = 0;
 	if( d.ty < 0 || d.ty > d.vi[0]->height - 2)
 	{
-        vsapi->setError(out, "rotate: ty must be within clip and not more than frame height - 2");
+        vsapi->mapSetError(out, "rotate: ty must be within clip and not more than frame height - 2");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
     }
 
-	d.ht = vsapi->propGetInt(in, "ht", 0, &err);
+	d.ht = vsapi->mapGetInt(in, "ht", 0, &err);
 	if(err)
 		d.ht = d.vi[0]->height - d.ty;
 	if( d.ht < 2 || d.ht > d.vi[0]->height -  d.ty)
 	{
-        vsapi->setError(out, "rotate: ht must be atleast 2 and also ensure ty + ht not more than frame height");
+        vsapi->mapSetError(out, "rotate: ht must be atleast 2 and also ensure ty + ht not more than frame height");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
     }
-	d.axx = vsapi->propGetInt(in, "axx", 0, &err);
+	d.axx = vsapi->mapGetInt(in, "axx", 0, &err);
 	if(err)
 		d.axx = d.lx + d.wd/2;
 
-	d.axy = vsapi->propGetInt(in, "axy", 0, &err);
+	d.axy = vsapi->mapGetInt(in, "axy", 0, &err);
 	if(err)
 		d.axy = d.ty + d.ht/2;
 	
-    d.intq = !!vsapi->propGetInt(in, "intq", 0, &err);
+    d.intq = !!vsapi->mapGetInt(in, "intq", 0, &err);
     if (err)
         d.intq = 2;
 
     // Let's pretend the only allowed values are 1 or 0...
     if (d.intq < 0 || d.intq > 3) {
-        vsapi->setError(out, "rotate: intq must be 0 for near point, or 1 for bilinear or 2 bicubic or 3 for Lanczos interpolation");
+        vsapi->mapSetError(out, "rotate: intq must be 0 for near point, or 1 for bilinear or 2 bicubic or 3 for Lanczos interpolation");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
@@ -467,12 +465,23 @@ static void VS_CC rotateCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "Rotate", rotateInit, rotateGetFrame, rotateFree, fmParallel, 0, data, core);
+    rotateInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[2];
+    int ndeps = 0;
+    for (int i = 0; i < 2; i++)
+    	if (data->node[i] != NULL)
+    		deps[ndeps++] = { data->node[i], rpGeneral };
+    vsapi->createVideoFilter(out, "Rotate", data->vi[0], rotateGetFrame, rotateFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

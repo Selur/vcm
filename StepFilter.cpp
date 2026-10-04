@@ -31,7 +31,7 @@ StepFilter filter plugin for  avisynth+ by V.C.Mohan
 #include "math.h"
 */
 typedef struct {
-	VSNodeRef* node;
+	VSNode* node;
 	const VSVideoInfo* vi;
 	float boost; // change reference amplitude by this
 	bool add;	// correction is additive or multiplacative
@@ -232,11 +232,9 @@ void fullProcessStepFilter( finc* dp, const finc* sp, int pitch, float boost,
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input limit. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate limits.
-static void VS_CC stepfilterInit(VSMap* in, VSMap* out, void** instanceData,
-	VSNode* node, VSCore* core, const VSAPI* vsapi) 
+static void stepfilterInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	StepFilterData* d = (StepFilterData*)*instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 
 }
 
@@ -249,10 +247,9 @@ static void VS_CC stepfilterInit(VSMap* in, VSMap* out, void** instanceData,
 	// upstream filters.
 	// Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 	// do the actual processing.
-static const VSFrameRef* VS_CC stepfilterGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	StepFilterData* d = (StepFilterData*)*instanceData;
+static const VSFrame* VS_CC stepfilterGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	StepFilterData* d = (StepFilterData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -261,18 +258,18 @@ static const VSFrameRef* VS_CC stepfilterGetFrame(int n, int activationReason, v
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept limits with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat* fi = d->vi->format;
+		const VSVideoFormat* fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
 		int width = vsapi->getFrameWidth(src, 0);
 		int nbytes = fi->bytesPerSample;
 		int nbits = fi->bitsPerSample;
-		VSFrameRef* dst = vsapi->copyFrame(src, core);
+		VSFrame* dst = vsapi->copyFrame(src, core);
 		
-		int np = fi->colorFamily == cmRGB ? 3 : 1;
+		int np = fi->colorFamily == cfRGB ? 3 : 1;
 
 		for (int plane = 0; plane < np; plane++)
 		{
@@ -292,7 +289,7 @@ static const VSFrameRef* VS_CC stepfilterGetFrame(int n, int activationReason, v
 				{
 					unsigned char min = 0, max = 255;
 
-					if (fi->colorFamily == cmYUV)
+					if (fi->colorFamily == cfYUV)
 						min = 16, max = 235;
 
 					fullProcessStepFilter(dp,  sp, pitch, d->boost,
@@ -304,7 +301,7 @@ static const VSFrameRef* VS_CC stepfilterGetFrame(int n, int activationReason, v
 				{
 					uint16_t min = 0, max = 255 << (nbits - 8);
 
-					if (fi->colorFamily == cmYUV)
+					if (fi->colorFamily == cfYUV)
 						min = 16 << (nbits - 8), max = 235 << (nbits - 8);
 
 					fullProcessStepFilter((uint16_t*)dp, (const uint16_t*)sp, pitch, d->boost,
@@ -345,21 +342,21 @@ static void VS_CC stepfilterCreate(const VSMap* in, VSMap* out, void* userData, 
 	int err;
 
 	// Get a limit reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "StepFilter: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "StepFilter: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "StepFilter: Half float formats not allowed ");
+		vsapi->mapSetError(out, "StepFilter: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	int temp = !!int64ToIntS(vsapi->propGetInt(in, "add", 0, &err));
+	int temp = !!int64ToIntS(vsapi->mapGetInt(in, "add", 0, &err));
 	if (err)
 	{
 		d.add = true;
@@ -371,7 +368,7 @@ static void VS_CC stepfilterCreate(const VSMap* in, VSMap* out, void* userData, 
 	else
 		d.add = true;
 
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "limit", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "limit", 0, &err));
 	if (err)
 	{
 		d.limit = false;
@@ -383,7 +380,7 @@ static void VS_CC stepfilterCreate(const VSMap* in, VSMap* out, void* userData, 
 	else
 		d.limit = true;
 
-	d.boost = vsapi->propGetFloat(in, "boost", 0, &err);
+	d.boost = vsapi->mapGetFloat(in, "boost", 0, &err);
 
 	if (err)
 	{
@@ -393,26 +390,26 @@ static void VS_CC stepfilterCreate(const VSMap* in, VSMap* out, void* userData, 
 	{
 		if (d.boost < 0.5 || d.boost > 5.0)
 		{
-			vsapi->setError(out, "StepFilter: boost must have a value between 0.5 and 5.0");
+			vsapi->mapSetError(out, "StepFilter: boost must have a value between 0.5 and 5.0");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
-	d.segmenthor = int64ToIntS(vsapi->propGetInt(in, "segmenthor", 0, &err));
+	d.segmenthor = int64ToIntS(vsapi->mapGetInt(in, "segmenthor", 0, &err));
 	if (err)
 		d.segmenthor = 60;
 	else if ( d.segmenthor != 0 && d.segmenthor < 16 && d.segmenthor >= d.vi->width / 2)
 	{
-		vsapi->setError(out, "StepFilter: segmenthor must be either zero or have a value between 16 and frame width / 2");
+		vsapi->mapSetError(out, "StepFilter: segmenthor must be either zero or have a value between 16 and frame width / 2");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.segmentvert = int64ToIntS(vsapi->propGetInt(in, "segmentvert", 0, &err));
+	d.segmentvert = int64ToIntS(vsapi->mapGetInt(in, "segmentvert", 0, &err));
 	if (err)
 		d.segmentvert = 60;
 	else if (d.segmentvert != 0 && d.segmentvert < 16 && d.segmentvert >= d.vi->height / 2)
 	{
-		vsapi->setError(out, "StepFilter: segmentvert must be either zero or have a value between 16 and frame height / 2");
+		vsapi->mapSetError(out, "StepFilter: segmentvert must be either zero or have a value between 16 and frame height / 2");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -425,7 +422,17 @@ static void VS_CC stepfilterCreate(const VSMap* in, VSMap* out, void* userData, 
 
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "StepFilter", stepfilterInit, stepfilterGetFrame, stepfilterFree, fmParallel, 0, data, core);
+	stepfilterInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "StepFilter", data->vi, stepfilterGetFrame, stepfilterFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

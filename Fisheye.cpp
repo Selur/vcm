@@ -39,7 +39,7 @@ Copyright (C) <2021>  <V.C.Mohan>
 
 //-------------------------------------------------------------------------
 typedef struct {
-	VSNodeRef* node;	
+	VSNode* node;	
 	const VSVideoInfo* ivi;
 	VSVideoInfo vi;
 	
@@ -78,7 +78,7 @@ typedef struct {
  --------------------------------------------------*/
  //Here is the acutal constructor code used
 
-static void VS_CC fisheyeInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static void fisheyeInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	FisheyeData* d = (FisheyeData*)*instanceData;	
 	d->frad = d->fdia / 2;
@@ -94,16 +94,13 @@ static void VS_CC fisheyeInit(VSMap* in, VSMap* out, void** instanceData, VSNode
 		d->vi.numFrames = d->ivi->numFrames;
 		d->vi.fpsDen = d->ivi->fpsDen;
 		d->vi.fpsNum = d->ivi->fpsNum;
-		d->vi.flags = d->ivi->flags;
 		d->vi.height = d->oRadius * 2;
 		d->vi.width = d->oRadius * 2;
 
-		vsapi->setVideoInfo(&d->vi, 1, node);
 	}
 	else
 	{
 		// in test  frame dimensions remain unaltered
-		vsapi->setVideoInfo(d->ivi, 1, node);
 	}
 	
 	
@@ -114,13 +111,13 @@ static void VS_CC fisheyeInit(VSMap* in, VSMap* out, void** instanceData, VSNode
 	// output
 	int ht = d->oRadius * 2;
 	int wd = d->oRadius * 2;
-	const VSFormat* fi = d->vi.format;
+	const VSVideoFormat* fi = &d->vi.format;
 	int nbytes = fi->bytesPerSample;
 	int nbits = fi->bitsPerSample;
 	d->quantile = 64;
 	int nEntries = d->test ? 2 :d->q == 1? 3: 4;	
 		
-	d->xyAndQ = (int*)vs_aligned_malloc<int>(sizeof(int) * d->oRadius * d->oRadius * nEntries, 32);
+	d->xyAndQ = (int*)vsh_aligned_malloc<int>(sizeof(int) * d->oRadius * d->oRadius * nEntries, 32);
 
 	int* xyQ = d->xyAndQ;
 	float xy[2];
@@ -203,10 +200,9 @@ static void VS_CC fisheyeInit(VSMap* in, VSMap* out, void** instanceData, VSNode
 }
 //------------------------------------------------------------------------------------------------
 
-static const VSFrameRef* VS_CC fisheyeGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	FisheyeData* d = (FisheyeData*)*instanceData;
+static const VSFrame* VS_CC fisheyeGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	FisheyeData* d = (FisheyeData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -214,9 +210,9 @@ static const VSFrameRef* VS_CC fisheyeGetFrame(int n, int activationReason, void
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
-		VSFrameRef* dst;
-		const VSFormat* fi = d->ivi->format;
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		VSFrame* dst;
+		const VSVideoFormat* fi = &d->ivi->format;
 		int sheight = vsapi->getFrameHeight(src, 0);
 		int swidth = vsapi->getFrameWidth(src, 0);
 		int nbits = fi->bitsPerSample;
@@ -252,7 +248,7 @@ static const VSFrameRef* VS_CC fisheyeGetFrame(int n, int activationReason, void
 			if (d->test)
 			{
 				
-				if (fi->colorFamily == cmRGB)
+				if (fi->colorFamily == cfRGB)
 				{
 					if (nbytes == 1)
 						dimplaneRGB(dp, sp, spitch, swidth, sheight, d->dim);
@@ -262,7 +258,7 @@ static const VSFrameRef* VS_CC fisheyeGetFrame(int n, int activationReason, void
 						dimplaneRGB((float*)dp, (float*)sp, spitch, swidth, sheight, d->dim);
 				}
 
-				else if ( p == 0 && fi->colorFamily == cmYUV)
+				else if ( p == 0 && fi->colorFamily == cfYUV)
 				{
 					if (nbytes == 1)
 					{
@@ -319,11 +315,11 @@ static const VSFrameRef* VS_CC fisheyeGetFrame(int n, int activationReason, void
 				int oCenter = d->oRadius * dpitch + d->oRadius;
 				
 				uint8_t min8 = 0, max8 = (uint8_t)255;
-				uint16_t min16 = (uint16_t)(fi->colorFamily == cmYUV ? 16 << (nbits - 8) : 0);
-				uint16_t max16 = (uint16_t)((fi->colorFamily == cmYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
+				uint16_t min16 = (uint16_t)(fi->colorFamily == cfYUV ? 16 << (nbits - 8) : 0);
+				uint16_t max16 = (uint16_t)((fi->colorFamily == cfYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
 				float minf = 0, maxf = 1.0f;
 
-				if (p > 0 && fi->colorFamily == cmYUV)
+				if (p > 0 && fi->colorFamily == cfYUV)
 				{
 					minf = -0.5f;
 					maxf = 0.5f;
@@ -443,9 +439,9 @@ static void VS_CC fisheyeFree(void* instanceData, VSCore* core, const VSAPI* vsa
 	FisheyeData* d = (FisheyeData*)instanceData;
 	vsapi->freeNode(d->node);
 	
-		vs_aligned_free(d->xyAndQ);
+		vsh_aligned_free(d->xyAndQ);
 		if (!d->iCoeff == NULL)
-			vs_aligned_free(d->iCoeff);
+			vsh_aligned_free(d->iCoeff);
 	
 	free(d);
 }
@@ -459,29 +455,29 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	int temp;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.ivi = vsapi->getVideoInfo(d.node);
 
 	// In this first version we only want to handle 8bit integer formats. Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.ivi) || d.ivi->width == 0 || d.ivi->height == 0
-		|| (d.ivi->format->colorFamily != cmYUV && d.ivi->format->colorFamily != cmGray
-			&& d.ivi->format->colorFamily != cmRGB))
+	if (!isConstantVideoFormat(d.ivi) || d.ivi->width == 0 || d.ivi->height == 0
+		|| (d.ivi->format.colorFamily != cfYUV && d.ivi->format.colorFamily != cfGray
+			&& d.ivi->format.colorFamily != cfRGB))
 	{
-		vsapi->setError(out, "Fisheye: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
+		vsapi->mapSetError(out, "Fisheye: only RGB, Yuv or Gray color constant formats and const frame dimensions input supported");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.ivi->format->colorFamily == cmYUV && (d.ivi->format->subSamplingH != 0 || d.ivi->format->subSamplingW != 0))
+	if (d.ivi->format.colorFamily == cfYUV && (d.ivi->format.subSamplingH != 0 || d.ivi->format.subSamplingW != 0))
 	{
-		vsapi->setError(out, "Fisheye: for YUV input only YUV444 allowed");
+		vsapi->mapSetError(out, "Fisheye: for YUV input only YUV444 allowed");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	if (d.ivi->format->sampleType == stFloat && d.ivi->format->bitsPerSample == 16)
+	if (d.ivi->format.sampleType == stFloat && d.ivi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Fisheye: half float input not allowed.");
+		vsapi->mapSetError(out, "Fisheye: half float input not allowed.");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -493,21 +489,21 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
 
-	d.method = int64ToIntS(vsapi->propGetInt(in, "method", 0, &err));
+	d.method = int64ToIntS(vsapi->mapGetInt(in, "method", 0, &err));
 	if (err)
 		d.method = 3;
 	if (d.method < 1 || d.method > 5)
 	{
-		vsapi->setError(out, "Fisheye: method must be between 1 and 5 ");
+		vsapi->mapSetError(out, "Fisheye: method must be between 1 and 5 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	d.origin_x = int64ToIntS(vsapi->propGetInt(in, "xo", 0, &err));
+	d.origin_x = int64ToIntS(vsapi->mapGetInt(in, "xo", 0, &err));
 	if (err)
 		d.origin_x = d.ivi->width / 2;
 
-	d.origin_y = int64ToIntS(vsapi->propGetInt(in, "yo", 0, &err));
+	d.origin_y = int64ToIntS(vsapi->mapGetInt(in, "yo", 0, &err));
 	if (err)
 		d.origin_y = d.ivi->height / 2;
 
@@ -516,24 +512,24 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	
 
 
-	d.frad = int64ToIntS(vsapi->propGetInt(in, "frad", 0, &err));	
+	d.frad = int64ToIntS(vsapi->mapGetInt(in, "frad", 0, &err));	
 	if (err)
 		d.frad = radius; // (d.ivi->width > d.ivi->height ? d.ivi->height : d.ivi->width) / 2;
 
 	else if (d.frad < 64)
 	{
-		vsapi->setError(out, "Fisheye: frad must be at least 64 ");
+		vsapi->mapSetError(out, "Fisheye: frad must be at least 64 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.fov = (double)vsapi->propGetFloat(in, "fov", 0, &err);
+	d.fov = (double)vsapi->mapGetFloat(in, "fov", 0, &err);
 
 	if (err)
 		d.fov = 120.0;
 	else if (d.fov < 40 || d.fov > 170)
 	{
-		vsapi->setError(out, "Fisheye: fov can be 40 to 170 only ");
+		vsapi->mapSetError(out, "Fisheye: fov can be 40 to 170 only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -550,32 +546,32 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 		partiallyInside = true;
 	else
 	{
-		vsapi->setError(out, "Fisheye: origin and frad must ensure at least part of fisheye image is inside frame ");
+		vsapi->mapSetError(out, "Fisheye: origin and frad must ensure at least part of fisheye image is inside frame ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	d.fdia = d.frad * 2;
 
 	
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "sqr", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "sqr", 0, &err));
 	if (err)
 		d.sqr = true;
 	else
 		d.sqr = temp == 0 ? false : true;
 	
 
-	d.rix = (double)(vsapi->propGetFloat(in, "rix", 0, &err));
+	d.rix = (double)(vsapi->mapGetFloat(in, "rix", 0, &err));
 	if (err)
 		d.rix = 1.15;
 	if (d.rix < 1.0 || d.rix > 1.5)
 	{
-		vsapi->setError(out, "Fisheye: rix must be 1.0 to 1.5 ");
+		vsapi->mapSetError(out, "Fisheye: rix must be 1.0 to 1.5 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
 
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "test", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "test", 0, &err));
 	if (err)
 		d.test = false;
 	else
@@ -583,22 +579,22 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	if (d.test)
 	{
 		
-		d.dots = int64ToIntS(vsapi->propGetInt(in, "dots", 0, &err));
+		d.dots = int64ToIntS(vsapi->mapGetInt(in, "dots", 0, &err));
 		if (err)
 			d.dots = 2;
 		else if (d.dots < 1 || d.dots > 4)
 		{
-			vsapi->setError(out, "Fisheye: dots must be 1 to 4 only ");
+			vsapi->mapSetError(out, "Fisheye: dots must be 1 to 4 only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		d.dim = (float)(1.0 - vsapi->propGetFloat(in, "dim", 0, &err));
+		d.dim = (float)(1.0 - vsapi->mapGetFloat(in, "dim", 0, &err));
 		if (err)
 			d.dim = 0.75f;
 		if (d.dim < 0.0f || d.dim > 1.0f)
 		{
-			vsapi->setError(out, "Fisheye: dim must be from 0 to 1.0 only ");
+			vsapi->mapSetError(out, "Fisheye: dim must be from 0 to 1.0 only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -607,12 +603,12 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	else
 	{
 		
-		d.q = int64ToIntS(vsapi->propGetInt(in, "q", 0, &err));
+		d.q = int64ToIntS(vsapi->mapGetInt(in, "q", 0, &err));
 		if (err)
 			d.q = 1;
 		else if (d.q < 1 || d.q > 4)
 		{
-			vsapi->setError(out, "Fisheye: q must be 1 to 4 only ");
+			vsapi->mapSetError(out, "Fisheye: q must be 1 to 4 only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -625,9 +621,33 @@ static void VS_CC fisheyeCreate(const VSMap* in, VSMap* out, void* userData,
 	*data = d;
 
 	if (insideFrame)
-		vsapi->createFilter(in, out, "Fisheye", fisheyeInit, fisheyeGetFrame, fisheyeFree, fmParallel, 0, data, core);
+	{
+		fisheyeInit(in, out, (void **)&data, core, vsapi);
+		if (vsapi->mapGetError(out))
+		{
+			free(data);
+			return;
+		}
+		VSFilterDependency deps[1];
+		int ndeps = 0;
+		if (data->node != NULL)
+			deps[ndeps++] = { data->node, rpGeneral };
+		vsapi->createVideoFilter(out, "Fisheye", (data->test ? data->ivi : &data->vi), fisheyeGetFrame, fisheyeFree, fmParallel, deps, ndeps, data, core);
+	}
 	else
-		vsapi->createFilter(in, out, "FisheyePart", fisheyepartInit, fisheyepartGetFrame, fisheyepartFree, fmParallel, 0, data, core);
+	{
+		fisheyepartInit(in, out, (void **)&data, core, vsapi);
+		if (vsapi->mapGetError(out))
+		{
+			free(data);
+			return;
+		}
+		VSFilterDependency deps[1];
+		int ndeps = 0;
+		if (data->node != NULL)
+			deps[ndeps++] = { data->node, rpGeneral };
+		vsapi->createVideoFilter(out, "FisheyePart", data->ivi, fisheyepartGetFrame, fisheyepartFree, fmParallel, deps, ndeps, data, core);
+	}
 }
 
 // registerFunc("Fisheye", "clip:clip;method:int:opt;xo:int:opt;yo:int:opt;frad:int:opt;sqr:int:opt;rix:float:opt;fov:float:opt;test:int:opt;q:int:opt;dots:int:opt;", fisheyeCreate, 0, plugin);

@@ -35,7 +35,7 @@ HistogramAdjust filter plugin for vapoursynth by V.C.Mohan
 #include "HistogramAdjustHelper.cpp"
 */
 typedef struct {
-				VSNodeRef *node[2];
+				VSNode *node[2];
 				const VSVideoInfo *vi[2];
 				int type;			// 1. equalize,2. match clip, 3 match %age table 4. match cummulative table
 				int table[40];				// histogram values from this table  to be used for matching
@@ -54,29 +54,28 @@ typedef struct {
 
 //-------------------------------------------------------------------------------------------------
 
-static void VS_CC histogramadjustInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void histogramadjustInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     HistogramAdjustData *d = (HistogramAdjustData *) * instanceData;
-    vsapi->setVideoInfo(d->vi[0], 1, node);
 
-	int nb = d->vi[0]->format->bitsPerSample;
+	int nb = d->vi[0]->format.bitsPerSample;
 	int maxvalue = nb <= 12 ? 1 << nb : 4096;	// corresponds to 12 bit depth
 
 	d->matchbuf = NULL;
 
 	if ( d->type != 1)
 		// not equalization
-		d->matchbuf = vs_aligned_malloc <float>(sizeof( float) * maxvalue , 32);	 
+		d->matchbuf = vsh_aligned_malloc <float>(sizeof( float) * maxvalue , 32);	 
 		
 	if (d->type == 2)	// matching with given frame of a clip
 	{		
 					// so get the frame of that clip		
-		const VSFrameRef *matchf = vsapi->getFrame(d->mf, d->node[1], NULL, 0);
+		const VSFrame *matchf = vsapi->getFrame(d->mf, d->node[1], NULL, 0);
 			
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *matchfi = d->vi[1]->format;
+        const VSVideoFormat *matchfi = &d->vi[1]->format;
         int mht = vsapi->getFrameHeight(matchf, 0);
         int mwd = vsapi->getFrameWidth(matchf, 0);
 		const uint8_t *mfp = vsapi->getReadPtr(matchf, 0);
@@ -114,6 +113,7 @@ static void VS_CC histogramadjustInit(VSMap *in, VSMap *out, void **instanceData
 		vsapi->freeFrame( matchf);			
 
 		vsapi->freeNode (d->node[1]);
+		d->node[1] = NULL;
 	
 	}
 	else if (d->type == 3)		 
@@ -130,8 +130,8 @@ static void VS_CC histogramadjustInit(VSMap *in, VSMap *out, void **instanceData
 
 		if (count != maxvalue)
 		{
-			vsapi->setError(out, "in correct count ");
-			free(d->matchbuf);
+			vsapi->mapSetError(out, "hist: cummulative table does not reach 100 %");
+			vsh_aligned_free(d->matchbuf);
 			vsapi->freeNode(d->node[0]);
 			return;
 		}
@@ -146,7 +146,7 @@ static void VS_CC histogramadjustFree(void *instanceData, VSCore *core, const VS
     HistogramAdjustData *d = (HistogramAdjustData *)instanceData;
     vsapi->freeNode(d->node[0]);
 	if (d->matchbuf != NULL)
-		vs_aligned_free (d->matchbuf);
+		vsh_aligned_free (d->matchbuf);
 
     free(d);
 }
@@ -159,12 +159,11 @@ static void VS_CC histogramadjustFree(void *instanceData, VSCore *core, const VS
 // upstream filters.
 // Once all frames are ready the the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC histogramadjustGetFrame
-				(int n, int activationReason, void **instanceData, 
+static const VSFrame *VS_CC histogramadjustGetFrame
+				(int n, int activationReason, void *instanceData, 
 				void **frameData, VSFrameContext *frameCtx, 
-				VSCore *core, const VSAPI *vsapi)
-{
-    HistogramAdjustData *d = (HistogramAdjustData *) * instanceData;
+				VSCore *core, const VSAPI *vsapi) {
+    HistogramAdjustData *d = (HistogramAdjustData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -173,13 +172,13 @@ static const VSFrameRef *VS_CC histogramadjustGetFrame
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
        
-        const VSFormat *fi = d->vi[0]->format;
+        const VSVideoFormat *fi = &d->vi[0]->format;
 
 		int nbits = fi->bitsPerSample;
 		
-        VSFrameRef *dst = vsapi->newVideoFrame(fi, d->vi[0]->width, d->vi[0]->height, src, core);
+        VSFrame *dst = vsapi->newVideoFrame(fi, d->vi[0]->width, d->vi[0]->height, src, core);
 		int fwidth;	// number of samples to get. Will be multiplied number of bytes per sample by NewVideoFrame
 		if(fi->sampleType== stInteger)
 		{
@@ -189,7 +188,7 @@ static const VSFrameRef *VS_CC histogramadjustGetFrame
 		else
 			fwidth  = 4096;	// floating point
 		
-		float *histbuf = vs_aligned_malloc<float>(sizeof(float) * fwidth, 32);
+		float *histbuf = vsh_aligned_malloc<float>(sizeof(float) * fwidth, 32);
 		
 		for(int plane = 0; plane < fi->numPlanes; plane ++)
 		{
@@ -200,9 +199,9 @@ static const VSFrameRef *VS_CC histogramadjustGetFrame
 			int bwd = vsapi->getFrameWidth(src, plane);
 			int samplesize = fi->bytesPerSample; 
 			int pitch = src_stride / samplesize;
-			if (plane > 0  && fi->colorFamily == cmYUV)
+			if (plane > 0  && fi->colorFamily == cfYUV)
 			{
-				vs_bitblt(dstp, src_stride, srcp, src_stride, bwd * samplesize, bht);
+				bitblt(dstp, src_stride, srcp, src_stride, bwd * samplesize, bht);
 
 				continue;
 			}
@@ -432,7 +431,7 @@ static const VSFrameRef *VS_CC histogramadjustGetFrame
 		}
 	
 		vsapi->freeFrame (src);	
-		vs_aligned_free(histbuf);
+		vsh_aligned_free(histbuf);
 		return dst;	
 	}	// get frame
 
@@ -449,32 +448,32 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 
     HistogramAdjustData d;
     HistogramAdjustData *data;
-//  VSNodeRef *cref;
+//  VSNode *cref;
     int err;
 	int temp;
 
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node[0] = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node[0] = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi[0] = vsapi->getVideoInfo(d.node[0]);
 	d.node[1] = NULL;
     // In this first version we only want to handle 8 bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-    //if (!isConstantFormat(d->vi) || d->vi->format->sampleType != stInteger || d->vi->format->bitsPerSample != 8) {
-    //    vsapi->setError(out, "HistogramAdjust: only constant format 8 bit integer input supported");
+    //if (!isConstantVideoFormat(d->vi) || d->vi->format.sampleType != stInteger || d->vi->format.bitsPerSample != 8) {
+    //    vsapi->mapSetError(out, "HistogramAdjust: only constant format 8 bit integer input supported");
     //    vsapi->freeNode(d->node);
     //    return;
 
-	if (!isConstantFormat(d.vi[0]) )
+	if (!isConstantVideoFormat(d.vi[0]) )
 	{
-		vsapi->setError(out,"hist accepts const  format clip only");
+		vsapi->mapSetError(out,"hist accepts const  format clip only");
 		vsapi->freeNode(d.node[0]);
 		return;
     }
 
-	if(  d.vi[0]->format->colorFamily != cmYUV && d.vi[0]->format->colorFamily != cmGray)
+	if(  d.vi[0]->format.colorFamily != cfYUV && d.vi[0]->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out,"hist accepts YUV and Gray formats only");
+		vsapi->mapSetError(out,"hist accepts YUV and Gray formats only");
 		vsapi->freeNode(d.node[0]);
 		return;
     }
@@ -485,33 +484,31 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
     // strict checking because of what we wrote in the argument string the only reason
     // this could fail is when the value wasn't set by the user.
     // And when it's not set we want it to default to enabled->
-    d.type = vsapi->propGetInt(in, "type",0, &err);
+    d.type = vsapi->mapGetInt(in, "type",0, &err);
 	if(err)
 		d.type = 1;
-	if(d.type < 1 || d.type > 3)
+	if(d.type < 1 || d.type > 4)
 	{
 		// 1 =  equalisation, 2 = match using table values 3 = match using a specified frame of matching clip
-        vsapi->setError(out, "hist: type can have value of 1 for equalization, 2 match with frame of mclip, 3.match table of luma and population %ages or 4 match with table of luma and cummulative population %ages.y");
+        vsapi->mapSetError(out, "hist: type can have value of 1 for equalization, 2 match with frame of mclip, 3.match table of luma and population %ages or 4 match with table of luma and cummulative population %ages.y");
         vsapi->freeNode(d.node[0]);
         return;
     }
 
-	if (d.type == 2)
+	if (d.type == 3 || d.type == 4)
 	{
-		
-
-		int m = vsapi->propNumElements(in, "table");
+		int m = vsapi->mapNumElements(in, "table");
 
 		if ( m < 4 || (m & 1) != 0 || m > 40 )
 		{
-			vsapi->setError(out,"hist atleast 2 and not more than 20 pairs   of table values for matching to be specified");
+			vsapi->mapSetError(out,"hist atleast 2 and not more than 20 pairs   of table values for matching to be specified");
 			vsapi->freeNode(d.node[0]);
 			
 			return;
 		}
 
 		for(int i = 0; i < m; i ++)
-			d.table[i] = vsapi->propGetInt(in, "table", i, 0);
+			d.table[i] = vsapi->mapGetInt(in, "table", i, 0);
 
 		for( int i = 0, j = -1, k = 0; i < m; i += 2)
 		{
@@ -520,7 +517,7 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 			{
 				if (d.table[i] <= j || d.table[i] > 100 || d.table[i + 1] < 0 || d.table[i + 1] > 100)
 				{
-					vsapi->setError(out, "hist first member values of  pairs must be in ascending order and not more than 100. the second value of pair must be between 0 and 100");
+					vsapi->mapSetError(out, "hist first member values of  pairs must be in ascending order and not more than 100. the second value of pair must be between 0 and 100");
 					vsapi->freeNode(d.node[0]);
 					return;
 				}
@@ -531,7 +528,7 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 				
 				if (d.table[i] <= j || d.table[i] > 100 || d.table[i + 1] < k || d.table[i + 1] > 100)
 				{
-					vsapi->setError(out, "hist  luma and cummulative populatio values of  pairs. Both must be in ascending order 0 to 100.");
+					vsapi->mapSetError(out, "hist  luma and cummulative populatio values of  pairs. Both must be in ascending order 0 to 100.");
 					vsapi->freeNode(d.node[0]);
 					return;
 				}
@@ -546,50 +543,50 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 
 	}	
 
-	else if(d.type == 3)
+	else if(d.type == 2)
 	{		
-		 d.node[1] = vsapi->propGetNode(in, "clipm", 0, &err);
+		 d.node[1] = vsapi->mapGetNode(in, "clipm", 0, &err);
 		
 		 if (err)
 		 {
-			d.node[1] = vsapi->cloneNodeRef(d.node[0]);	// default use first clip only
+			d.node[1] = vsapi->addNodeRef(d.node[0]);	// default use first clip only
 			
 		 }
 
 		 d.vi[1] =  vsapi->getVideoInfo(d.node[1]);
 
-		 if (!isConstantFormat(d.vi[1]) )
+		 if (!isConstantVideoFormat(d.vi[1]) )
 		{
-			vsapi->setError(out,"hist accepts for matching const YUV  format clipm only");
+			vsapi->mapSetError(out,"hist accepts for matching const YUV  format clipm only");
 			
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}	
 		
-		if(d.vi[1]->format->colorFamily != cmYUV)
+		if(d.vi[1]->format.colorFamily != cfYUV)
 		{
-			vsapi->setError(out,"hist accepts for matching clipm YUV  formats only. ");			
+			vsapi->mapSetError(out,"hist accepts for matching clipm YUV  formats only. ");			
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 		
-		d.mf = vsapi->propGetInt(in, "fm", 0, &err);
+		d.mf = vsapi->mapGetInt(in, "mf", 0, &err);
 		
 		if (err)
 			d.mf = 0;
 
 		if( d.mf < 0 || d.mf >= d.vi[1]->numFrames )
 		{
-			vsapi->setError(out,"hist clip for matching have fewer frames than Frame number specified");
+			vsapi->mapSetError(out,"hist clip for matching have fewer frames than Frame number specified");
 			
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 	}
-	temp = !!vsapi->propGetInt(in, "window", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "window", 0, &err);
 
 	if (err)
 
@@ -597,7 +594,7 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 
 	else if(temp < 0 || temp > 1)
 	{
-		vsapi->setError(out,"hist window can have a value of 0 or 1 only ");
+		vsapi->mapSetError(out,"hist window can have a value of 0 or 1 only ");
 		
 		vsapi->freeNode(d.node[0]);
 		if (d.node[1] != NULL)
@@ -611,7 +608,7 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 		d.window = true;
 
 		
-	d.limit = vsapi->propGetInt(in, "limit", 0, &err);
+	d.limit = vsapi->mapGetInt(in, "limit", 0, &err);
 
 	if (err)
 	
@@ -620,7 +617,7 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
 	
 	if (d.limit < 0 || d.limit > 99 ) 
 	{
-        vsapi->setError(out, "hist: limit a %age value  can be an integer from 0 to 99 only");
+        vsapi->mapSetError(out, "hist: limit a %age value  can be an integer from 0 to 99 only");
         
 		vsapi->freeNode(d.node[0]);
 		if (d.node[1] != NULL)
@@ -646,14 +643,23 @@ static void VS_CC histogramadjustCreate(const VSMap *in,
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters fmParallelRequests is usually easier to achieve as an
     // be prefetched in parallel but the actual processing is serialized->
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If you filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "HistogramAdjust", histogramadjustInit, 
-								histogramadjustGetFrame, histogramadjustFree, 
-								fmParallel, 0, data, core);
+    histogramadjustInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[2];
+    int ndeps = 0;
+    for (int i = 0; i < 2; i++)
+    	if (data->node[i] != NULL)
+    		deps[ndeps++] = { data->node[i], rpGeneral };
+    vsapi->createVideoFilter(out, "HistogramAdjust", data->vi[0], histogramadjustGetFrame, histogramadjustFree, fmParallel, deps, ndeps, data, core);
    // return;
 
 

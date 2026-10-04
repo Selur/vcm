@@ -10,8 +10,8 @@ This filter operates in freq domain (2d) and improves image having blurred image
   ringing. Scale is applied to bring image to acceptable levels.  
 
 Author V.C.Mohan. 
-11 jun 2015, 22 May 2021
-  Copyright (C) <2008-2021>  <V.C.Mohan>
+11 jun 2015, 22 May 2021 21 dec 2025
+  Copyright (C) <2008-2026>  <V.C.Mohan>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ Author V.C.Mohan.
 
 typedef struct 
 {
-    VSNodeRef *node;
+    VSNode *node;
     const VSVideoInfo *vi;
 	bool line;	//True: blur is linear . false : circular
     int xcoord, ycoord; // if linear blur line end coordinates (symmetrical about origin). If circular radius
@@ -73,13 +73,12 @@ void sharpenPlane(F2QSharpData* d, const finc* sp, finc* dp, int pitch,
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC f2qsharpInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void f2qsharpInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     F2QSharpData *d = (F2QSharpData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 
-    const VSFormat *fi = d->vi->format;
-	if (fi->colorFamily == cmYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
+    const VSVideoFormat *fi = &d->vi->format;
+	if (fi->colorFamily == cfYUV && (fi->subSamplingH != 0 || fi->subSamplingW != 0))
 	{
 		d->plane[1] = false;
 		d->plane[2] = false;
@@ -107,31 +106,32 @@ static void VS_CC f2qsharpInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 	int nbits = fi->bitsPerSample;	
 	
 	d->fsize = d->hbest * d->wbest;
-	int fqsize = d->hbest * d->frqwidth;
+	d->fqsize = d->hbest * d->frqwidth;	// was a local that shadowed the member, leaving d->fqsize uninitialized
 
 #include "ConstructorCodeForLateBindingfft.cpp"
 
 	if (!ok)
 	{
-		vsapi->setError(out, "FQSharp: could not load any of the fft dll or get required fnctions");
+		vsapi->mapSetError(out, "FQSharp: could not load any of the fft dll or get required fnctions");
 		if (d->hinstLib != NULL)
 			FreeLibrary(d->hinstLib);
 		vsapi->freeNode(d->node);
-		free(d);
 		return;
 	}
-	 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->fsize);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->fsize);
 
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * d->fqsize);// +1 is only a safeguard not really reqd
-	
-				// creates forward and inverse fft plans
-	d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * d->fqsize);
-			//  forward for padded size complex to complex  
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf,  FFTW_MEASURE);
-			// inverse 
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * d->fqsize);// +1 is only a safeguard not really reqd
 
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf,  FFTW_MEASURE);
+					// creates forward and inverse fft plans
+		d->FreqFilter = (float*)d->fftwf_malloc(sizeof(float) * d->fqsize);
+		//  forward for padded size complex to complex  
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		// inverse 
+
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+	}
 
 			// draw PSF for the specified   blur value. 
 
@@ -197,10 +197,9 @@ void sharpenPlane(F2QSharpData* d, const finc * sp, finc * dp, int pitch,
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC f2qsharpGetFrame(int n, int activationReason, void **instanceData, 
-		void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    F2QSharpData *d = (F2QSharpData *) * instanceData;
+static const VSFrame *VS_CC f2qsharpGetFrame(int n, int activationReason, void *instanceData, 
+		void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    F2QSharpData *d = (F2QSharpData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -210,16 +209,16 @@ static const VSFrameRef *VS_CC f2qsharpGetFrame(int n, int activationReason, voi
 	else if (activationReason == arAllFramesReady)	
 	{
 		
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 
-        VSFrameRef *dst = vsapi->copyFrame( src, core);
+        VSFrame *dst = vsapi->copyFrame( src, core);
 		
         int nplanes = fi->numPlanes > 3 ? 3 : fi->numPlanes;
 
@@ -262,7 +261,7 @@ static const VSFrameRef *VS_CC f2qsharpGetFrame(int n, int activationReason, voi
 				// float data
 				float min = 0.0f;
 				float max = 1.0f;
-				if (fi->colorFamily == cmYUV && plane > 0)
+				if (fi->colorFamily == cfYUV && plane > 0)
 				{
 					min = -0.5f;
 					max = 0.5f;
@@ -293,14 +292,16 @@ static const VSFrameRef *VS_CC f2qsharpGetFrame(int n, int activationReason, voi
 static void VS_CC f2qsharpFree(void *instanceData, VSCore *core, const VSAPI *vsapi) 
 {
     F2QSharpData *d = (F2QSharpData *)instanceData;
-	
-	d->fftwf_destroy_plan(d->pf);
-	d->fftwf_destroy_plan(d->pinv);
-    vsapi->freeNode(d->node);
-	// release buffers
-	d->fftwf_free(d->inBuf);
-	d->fftwf_free(d->outBuf);
-	d->fftwf_free(d->FreqFilter);
+	{
+		std::lock_guard<std::mutex> guard(g_mutex);
+		d->fftwf_destroy_plan(d->pf);
+		d->fftwf_destroy_plan(d->pinv);
+		vsapi->freeNode(d->node);
+		// release buffers
+		d->fftwf_free(d->inBuf);
+		d->fftwf_free(d->outBuf);
+		d->fftwf_free(d->FreqFilter);
+	}
 	if (d->hinstLib != NULL)
 		FreeLibrary(d->hinstLib);
     free(d);
@@ -314,16 +315,16 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     int err;
 	int temp;
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // In this first version we only want to handle 8bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi) && d.vi->format->colorFamily != cmRGB
-		&& d.vi->format->colorFamily != cmYUV
-		&& d.vi->format->colorFamily != cmGray)
+	if (!isConstantVideoFormat(d.vi) && d.vi->format.colorFamily != cfRGB
+		&& d.vi->format.colorFamily != cfYUV
+		&& d.vi->format.colorFamily != cfGray)
 	{
-        vsapi->setError(out, "F2QSharp: Input clip must have constant dimensions and in YUV or RGB or Grey format");
+        vsapi->mapSetError(out, "F2QSharp: Input clip must have constant dimensions and in YUV or RGB or Grey format");
         vsapi->freeNode(d.node);
         return;
     }
@@ -334,7 +335,7 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     // strict checking because of what we wrote in the argument string, the only
     // reason this could fail is when the value wasn't set by the user.
     // And when it's not set we want it to default to enabled.
-    temp = !!vsapi->propGetInt(in, "line", 0, &err);
+    temp = !!vsapi->mapGetInt(in, "line", 0, &err);
     if (err)
 	{
         d.line = false;
@@ -343,7 +344,7 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     // Let's pretend the only allowed values are 1 or 0...
 		if (temp < 0 || temp > 1)
 	{
-		vsapi->setError(out, "F2QSharp: line must be 0 (for circular blur) 1(for linear blur) ");
+		vsapi->mapSetError(out, "F2QSharp: line must be 0 (for circular blur) 1(for linear blur) ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -354,19 +355,19 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
 		else
 			d.line = false;
 	}
-	d.wn = (float)vsapi->propGetFloat(in, "wn", 0, &err);
+	d.wn = (float)vsapi->mapGetFloat(in, "wn", 0, &err);
     if (err)
 	{
         d.wn = 0.05f;
 	}
 	else if (d.wn < 0.0001f || d.wn > 0.99f)
 	{
-		vsapi->setError(out, "F2QSharp: white noise wn value can only be between 0.0001 and 0.99  ");
+		vsapi->mapSetError(out, "F2QSharp: white noise wn value can only be between 0.0001 and 0.99  ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.xcoord = int64ToIntS(vsapi->propGetInt(in, "x", 0, &err));
+	d.xcoord = int64ToIntS(vsapi->mapGetInt(in, "x", 0, &err));
     if (err)
 	{
         d.xcoord = 2;
@@ -375,12 +376,12 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     //  the only allowed values are 
 		if ( (d.line && d.xcoord < 0) || d.xcoord > d.vi->width / 8 || ( !d.line && d.xcoord < 1))
 	{
-		vsapi->setError(out, "F2QSharp: x coordinate can have a value from 0 for line and 1 for circular blur to 1/8th frame width only ");
+		vsapi->mapSetError(out, "F2QSharp: x coordinate can have a value from 0 for line and 1 for circular blur to 1/8th frame width only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.ycoord = int64ToIntS(vsapi->propGetInt(in, "y", 0, &err));
+	d.ycoord = int64ToIntS(vsapi->mapGetInt(in, "y", 0, &err));
     if (err)
 	{
         d.ycoord = 2;
@@ -389,50 +390,50 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     //  the only allowed values are 
 		if ( d.ycoord <  - d.vi->height / 8 ||  d.ycoord  > d.vi->height / 8)
 	{
-		vsapi->setError(out, "F2QSharp: y coordinate can have a value between plus and minus 1/8th frame height only ");
+		vsapi->mapSetError(out, "F2QSharp: y coordinate can have a value between plus and minus 1/8th frame height only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	if ( d.xcoord == 0 && d.ycoord == 0)
 	{
-		vsapi->setError(out, "F2QSharp: both x and y coordinate must not be zeroes ");
+		vsapi->mapSetError(out, "F2QSharp: both x and y coordinate must not be zeroes ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "ham", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "ham", 0, &err));
 	d.ham = err ||temp == 0 ? false : true;
 
 	if (d.ham)
 	{
-		d.frad = int64ToIntS(vsapi->propGetInt(in, "frad", 0, &err));
+		d.frad = int64ToIntS(vsapi->mapGetInt(in, "frad", 0, &err));
 		if (err)
 		{
 			d.frad = 30;
 		}
 		else if (d.frad < 10 || d.frad > 50)
 		{
-			vsapi->setError(out, "F2QSharp: filter radius %age of smaller dimension of frame, can have a value of 10 to 50 only ");
+			vsapi->mapSetError(out, "F2QSharp: filter radius %age of smaller dimension of frame, can have a value of 10 to 50 only ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	d.scale = (float)vsapi->propGetFloat(in, "scale", 0, &err);
+	d.scale = (float)vsapi->mapGetFloat(in, "scale", 0, &err);
     if (err)
 	{
         d.scale = 0.45f;
 	}
 	else if (d.scale < 0.000001f || d.scale > 1000000.0f)
 	{
-		vsapi->setError(out, "F2QSharp: scale value must be between 0.000001 and 1000000");
+		vsapi->mapSetError(out, "F2QSharp: scale value must be between 0.000001 and 1000000");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->colorFamily == cmRGB)
+	if (d.vi->format.colorFamily == cfRGB)
 	{
-		int ntemp = vsapi->propNumElements(in, "rgb");
-		if (ntemp == 0)
+		int ntemp = vsapi->mapNumElements(in, "rgb");
+		if (ntemp <= 0)
 		{
 			d.plane[0] = true;
 			d.plane[1] = true;
@@ -440,19 +441,19 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
 		}
 		else if ( ntemp > 3)
 		{ 
-			vsapi->setError(out, "F2QSharp: rgb array can not have more than 3 values");
+			vsapi->mapSetError(out, "F2QSharp: rgb array can not have more than 3 values");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		else
 		{
-			temp = !!int64ToIntS(vsapi->propGetInt(in, "rgb", 0, &err));
+			temp = !!int64ToIntS(vsapi->mapGetInt(in, "rgb", 0, &err));
 			d.plane[0] = temp == 0 ? false : true;
 		}
 
 		for (int i = 1; i < 3; i++)
 		{
-			temp = !!int64ToIntS(vsapi->propGetInt(in, "rgb", i, &err));
+			temp = !!int64ToIntS(vsapi->mapGetInt(in, "rgb", i, &err));
 			if (err)
 				d.plane[i] = d.plane[i - 1];
 			else
@@ -465,10 +466,10 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
 		d.plane[2] = rgb;
 	}
 
-	else if (d.vi->format->colorFamily == cmYUV)
+	else if (d.vi->format.colorFamily == cfYUV)
 	{
-		int ntemp = vsapi->propNumElements(in, "yuv");
-		if (ntemp == 0)
+		int ntemp = vsapi->mapNumElements(in, "yuv");
+		if (ntemp <= 0)
 		{
 			d.plane[0] = true;
 			d.plane[1] = false;
@@ -476,25 +477,31 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
 		}
 		else if (ntemp > 3)
 		{
-			vsapi->setError(out, "F2QSharp: yuv array can not have more than 3 values");
+			vsapi->mapSetError(out, "F2QSharp: yuv array can not have more than 3 values");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		else
 		{
-			temp = !!int64ToIntS(vsapi->propGetInt(in, "yuv", 0, &err));
+			temp = !!int64ToIntS(vsapi->mapGetInt(in, "yuv", 0, &err));
 			d.plane[0] = temp == 0 ? false : true;
 		}
 
 		for (int i = 1; i < 3; i++)
 		{
-			temp = !!int64ToIntS(vsapi->propGetInt(in, "yuv", i, &err));
+			temp = !!int64ToIntS(vsapi->mapGetInt(in, "yuv", i, &err));
 			if (err)
 				d.plane[i] = d.plane[i - 1];
 			else
 				d.plane[i] = temp == 0 ? false : true;
 
 		}
+	}
+	else
+	{
+		d.plane[0] = true;
+		d.plane[1] = false;
+		d.plane[2] = false;
 	}
 
     // I usually keep the filter data struct on the stack and don't allocate it
@@ -511,13 +518,23 @@ static void VS_CC f2qsharpCreate(const VSMap *in, VSMap *out, void *userData, VS
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
 
-	vsapi->createFilter(in, out, "F2QSharp", f2qsharpInit, f2qsharpGetFrame, f2qsharpFree, fmParallelRequests, 0, data, core);
+	f2qsharpInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "F2QSharp", data->vi, f2qsharpGetFrame, f2qsharpFree, fmParallelRequests, deps, ndeps, data, core);
 
 }
 /*

@@ -41,7 +41,7 @@ Copyright (C) <2020 - 2021>  <V.C.Mohan>
 */
 typedef struct {
 
-		VSNodeRef *node;
+		VSNode *node;
 		const VSVideoInfo *vi;
 				
 		float abc[3];
@@ -70,22 +70,20 @@ typedef struct {
  --------------------------------------------------*/
 //Here is the init code used			
 			
-static void VS_CC debarrelInit(VSMap *in, VSMap *out, void **instanceData,
-	VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void debarrelInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     DeBarrelData *d = (DeBarrelData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 
 	// input frame dimensions
 	const int width = d->vi->width;
 	const int height = d->vi->height;
-	const VSFormat* fi = d->vi->format;
+	const VSVideoFormat* fi = &d->vi->format;
 	int nbytes = fi->bytesPerSample;
 	int nbits = fi->bitsPerSample;
 	d->quantile = 64;
 	d->nEntries = d->test ? 2 : d->q == 1 ? 3 : 4;
 
-	d->xyAndQ = (int*)vs_aligned_malloc<int>(sizeof(int) * (width / 2) * (height / 2) * d->nEntries, 32);
+	d->xyAndQ = (int*)vsh_aligned_malloc<int>(sizeof(int) * (width / 2) * (height / 2) * d->nEntries, 32);
 
 	int* xyQ = d->xyAndQ;
 	float xy[2];
@@ -168,10 +166,9 @@ static void VS_CC debarrelInit(VSMap *in, VSMap *out, void **instanceData,
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC debarrelGetFrame(int n, int activationReason, void **instanceData, 
-	void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-    DeBarrelData *d = (DeBarrelData *) * instanceData;
+static const VSFrame *VS_CC debarrelGetFrame(int n, int activationReason, void *instanceData, 
+	void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    DeBarrelData *d = (DeBarrelData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -181,12 +178,12 @@ static const VSFrameRef *VS_CC debarrelGetFrame(int n, int activationReason, voi
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
-		VSFrameRef *dst;
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		VSFrame *dst;
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);		
 
@@ -212,7 +209,7 @@ static const VSFrameRef *VS_CC debarrelGetFrame(int n, int activationReason, voi
 				int dpitch = spitch;
 
 				int iCenter = height / 2 * dpitch + width / 2;	// offset to center	
-				if (fi->colorFamily == cmRGB)
+				if (fi->colorFamily == cfRGB)
 				{
 					if (nbytes == 1)
 						dimplaneRGB(dp, sp, spitch, width, height, d->dim);
@@ -222,7 +219,7 @@ static const VSFrameRef *VS_CC debarrelGetFrame(int n, int activationReason, voi
 						dimplaneRGB((float*)dp, (float*)sp, spitch, width, height, d->dim);
 				}
 
-				else if (plane == 0 && fi->colorFamily == cmYUV)
+				else if (plane == 0 && fi->colorFamily == cfYUV)
 				{
 					if (nbytes == 1)
 					{
@@ -278,11 +275,11 @@ static const VSFrameRef *VS_CC debarrelGetFrame(int n, int activationReason, voi
 				int iCenter = (height / 2) * spitch + width / 2;	// offset from left top to center of frame
 				int oCenter = iCenter;
 				uint8_t min8 = 0, max8 = (uint8_t)255;
-				uint16_t min16 = (uint16_t)(fi->colorFamily == cmYUV ? 16 << (nbits - 8) : 0);
-				uint16_t max16 = (uint16_t)((fi->colorFamily == cmYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
+				uint16_t min16 = (uint16_t)(fi->colorFamily == cfYUV ? 16 << (nbits - 8) : 0);
+				uint16_t max16 = (uint16_t)((fi->colorFamily == cfYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
 				float minf = 0, maxf = 1.0f;
 
-				if (plane > 0 && fi->colorFamily == cmYUV)
+				if (plane > 0 && fi->colorFamily == cfYUV)
 				{
 					minf = -0.5f;
 					maxf = 0.5f;
@@ -415,9 +412,9 @@ static void VS_CC debarrelFree(void* instanceData, VSCore* core, const VSAPI* vs
 	DeBarrelData* d = (DeBarrelData*)instanceData;
 	vsapi->freeNode(d->node);
 
-	vs_aligned_free(d->xyAndQ);
+	vsh_aligned_free(d->xyAndQ);
 	if (!d->iCoeff == NULL)
-		vs_aligned_free(d->iCoeff);
+		vsh_aligned_free(d->iCoeff);
 
 	free(d);
 }
@@ -434,37 +431,37 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
     int err;
 	int temp;	// used to convert int to bool
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // In this first version we only want to handle 8bit integer formats. Note that
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isConstantFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0 || d.vi->format->subSamplingH != 0 || d.vi->format->subSamplingW != 0)
+    if (!isConstantVideoFormat(d.vi) || d.vi->width == 0 || d.vi->height == 0 || d.vi->format.subSamplingH != 0 || d.vi->format.subSamplingW != 0)
 	{
-        vsapi->setError(out, "DeBarrel: only RGB or those YUV formats that have no subsampling are supported. Frame dimensions should remain constant");
+        vsapi->mapSetError(out, "DeBarrel: only RGB or those YUV formats that have no subsampling are supported. Frame dimensions should remain constant");
         vsapi->freeNode(d.node);
         return;
     }
 
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "DeBarrel: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "DeBarrel: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "DeBarrel: Half float formats not allowed ");
+		vsapi->mapSetError(out, "DeBarrel: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.method = int64ToIntS(vsapi->propGetInt(in, "method", 0, &err));
+	d.method = int64ToIntS(vsapi->mapGetInt(in, "method", 0, &err));
 	if (err)
 		d.method = 2;
 	if (d.method < 1 || d.method > 2)
 	{
-		vsapi->setError(out, "DeBarrel: method can be 1 or 2 ");
+		vsapi->mapSetError(out, "DeBarrel: method can be 1 or 2 ");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -473,10 +470,10 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
 	{
 		for (int i = 0; i < 3; i++)
 		{
-			d.abc[i] = (float)vsapi->propGetFloat(in, "abc", i, 0);
+			d.abc[i] = (float)vsapi->mapGetFloat(in, "abc", i, 0);
 			if (d.abc[i] < 0.0 || d.abc[i] > 0.5)
 			{
-				vsapi->setError(out, "DeBarrel: abc[] values can be zero to less than 0.5 only");
+				vsapi->mapSetError(out, "DeBarrel: abc[] values can be zero to less than 0.5 only");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -484,7 +481,7 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 		if (d.abc[0] + d.abc[1] + d.abc[2] > 1.0)
 		{
-			vsapi->setError(out, "DeBarrel: sum of all three abc array values must be less than 1.0 ");
+			vsapi->mapSetError(out, "DeBarrel: sum of all three abc array values must be less than 1.0 ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -494,18 +491,18 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
 	{
 		for (int i = 0; i < 3; i++)
 		{
-			d.abc[i] = (float)vsapi->propGetFloat(in, "abc", i, 0);
+			d.abc[i] = (float)vsapi->mapGetFloat(in, "abc", i, 0);
 		}
 
 		if (d.abc[2] < 0.0 || d.abc[2] >= 0.5f)
 		{
-			vsapi->setError(out, "DeBarrel: third value of abc[]  can be zero to less than 0.5");
+			vsapi->mapSetError(out, "DeBarrel: third value of abc[]  can be zero to less than 0.5");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "pin", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "pin", 0, &err));
 
 	if (err)
 		temp = 0;
@@ -514,18 +511,18 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
 		d.pin = false;
 	else
 		d.pin = true;
-	d.q = int64ToIntS(vsapi->propGetInt(in, "q", 0, &err));
+	d.q = int64ToIntS(vsapi->mapGetInt(in, "q", 0, &err));
 	if (err)
 		d.q = 1;
 	else if(d.q < 0 || d.q > 4)
 	{
-		vsapi->setError(out, "DeBarrel: q  can be 1 to 4 only");
+		vsapi->mapSetError(out, "DeBarrel: q  can be 1 to 4 only");
 		vsapi->freeNode(d.node);
 		return;
 	}
 	
 	// d.test
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "test", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "test", 0, &err));
 
 	if (err)
 		temp = 0;
@@ -537,23 +534,23 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 	if (d.test)
 	{
-		d.dots = int64ToIntS(vsapi->propGetInt(in, "dots", 0, &err));
+		d.dots = int64ToIntS(vsapi->mapGetInt(in, "dots", 0, &err));
 
 		if (err)
 			d.dots = 2;
 		if (d.dots < 0 || d.dots > 4)			
 		{
-			vsapi->setError(out, "DeBarrel: dots can be 1 to 4 only.");
+			vsapi->mapSetError(out, "DeBarrel: dots can be 1 to 4 only.");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		d.dim = (float)( 1.0 - vsapi->propGetFloat(in, "dots", 0, &err));
+		d.dim = (float)( 1.0 - vsapi->mapGetFloat(in, "dots", 0, &err));
 		if (err)
 			d.dim = 0.75;
 		else if (d.dim < 0 || d.dim > 1.0f)
 		{
-			vsapi->setError(out, "DeBarrel: dim can be 0 to 1.0 only.");
+			vsapi->mapSetError(out, "DeBarrel: dim can be 0 to 1.0 only.");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -581,12 +578,22 @@ static void VS_CC debarrelCreate(const VSMap *in, VSMap *out, void *userData, VS
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "DeBarrel", debarrelInit, debarrelGetFrame, debarrelFree, fmParallel, 0, data, core);
+    debarrelInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "DeBarrel", data->vi, debarrelGetFrame, debarrelFree, fmParallel, deps, ndeps, data, core);
 }
 //////////////////////////////////////////
 // Init

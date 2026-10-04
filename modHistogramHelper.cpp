@@ -422,7 +422,13 @@ void fillAdjustedValuesf(const float * sp, float * dp, int pitch,
 
 int getMatchedValue( const float * mbuf, float val, int max)
 {
-	int start = 1.0 / val;
+	// mbuf is a normalized cumulative histogram (0 to 1, ascending), so val * max
+	// is a good starting index. 1.0 / val was used before, which is out of range for small values.
+	int start = (int)(val * (max - 1));
+	if (start < 0)
+		start = 0;
+	else if (start > max - 1)
+		start = max - 1;
 
 	if( mbuf[start] == val)
 		return start;

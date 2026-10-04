@@ -39,7 +39,7 @@ Author : V.C.Mohan
 */
 
 typedef struct {
-	VSNodeRef *node;
+	VSNode *node;
 	const VSVideoInfo *vi;
 	int jmax;	// max jitter to correct
 	float thresh;	// threshold value for row start detection
@@ -105,10 +105,9 @@ typedef struct {
  * The following is the implementation 
  * of the defined functions.
  *************************************************/
-	static void VS_CC dejitterInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
-	{
+	static void dejitterInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
+{
 		DejitterData *d = (DejitterData *)* instanceData;
-		vsapi->setVideoInfo(d->vi, 1, node);
 		
 	}
 /***************************************************************/	
@@ -121,9 +120,8 @@ typedef struct {
 	// upstream filters.
 	// Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 	// do the actual processing.
-	static const VSFrameRef *VS_CC dejitterGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-	{
-		DejitterData *d = (DejitterData *)* instanceData;
+	static const VSFrame *VS_CC dejitterGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+		DejitterData *d = (DejitterData *)instanceData;
 
 		if (activationReason == arInitial)
 		{
@@ -132,14 +130,14 @@ typedef struct {
 		}
 		else if (activationReason == arAllFramesReady)
 		{
-			const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+			const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
 			// The reason we query this on a per frame basis is because we want our filter
 			// to accept clips with varying dimensions. If we reject such content using d->vi
 			// would be better.
-			const VSFormat *fi = d->vi->format;
+			const VSVideoFormat *fi = &d->vi->format;
 			int height = vsapi->getFrameHeight(src, 0);
 			int width = vsapi->getFrameWidth(src, 0);
-			VSFrameRef *dst = vsapi->copyFrame(src, core);
+			VSFrame *dst = vsapi->copyFrame(src, core);
 			int nplanes = fi->numPlanes;
 			int nbytes = fi->bytesPerSample;
 			int nbits = fi->bitsPerSample;
@@ -161,7 +159,7 @@ typedef struct {
 			{
 				int shift = 0;
 
-				int np = (fi->colorFamily == cmRGB) ? 3 : 1;	//check on green or luma
+				int np = (fi->colorFamily == cfRGB) ? 3 : 1;	//check on green or luma
 				for (int p = 0; p < np; p++)
 				{
 					int shiftp;
@@ -197,7 +195,7 @@ typedef struct {
 					{
 						if (nbytes == 1)
 						{
-							uint8_t col = (fi->colorFamily == cmRGB) ? 0 : p > 0 ? 127 : 0;
+							uint8_t col = (fi->colorFamily == cfRGB) ? 0 : p > 0 ? 127 : 0;
 
 							shiftRow(dp[p], shift, width);
 
@@ -206,7 +204,7 @@ typedef struct {
 
 						else if (nbytes == 2)
 						{
-							uint16_t col = (fi->colorFamily == cmRGB) ? 0 : p > 0 ? 127 << (nbits - 8) : 0;
+							uint16_t col = (fi->colorFamily == cfRGB) ? 0 : p > 0 ? 127 << (nbits - 8) : 0;
 							// if 16 bit samples						
 							shiftRow((uint16_t *)dp[p], shift, width);
 
@@ -215,7 +213,7 @@ typedef struct {
 						}
 						else	//nbytes == 4 float
 						{
-							float col = 0.0; // (fi->colorFamily == cmRGB) ? 0 : p > 0 ? 0 : 0;
+							float col = 0.0; // (fi->colorFamily == cfRGB) ? 0 : p > 0 ? 0 : 0;
 							// if 32 bit samples						
 							shiftRow((float *)dp[p], shift, width);
 
@@ -257,70 +255,70 @@ typedef struct {
 		int temp;
 
 		// Get a clip reference from the input arguments. This must be freed later.
-		d.node = vsapi->propGetNode(in, "clip", 0, 0);
+		d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 		d.vi = vsapi->getVideoInfo(d.node);
 
 		// In this integer and float. Note that
 		// vi->format can be 0 if the input clip can change format midstream.
-		if (!isConstantFormat(d.vi)) // || d.vi->format->sampleType != stInteger || d.vi->format->bitsPerSample != 8)
+		if (!isConstantVideoFormat(d.vi)) // || d.vi->format.sampleType != stInteger || d.vi->format.bitsPerSample != 8)
 		{
-			vsapi->setError(out, "deJitter: format of clip must be constant");
+			vsapi->mapSetError(out, "deJitter: format of clip must be constant");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV  && d.vi->format->colorFamily != cmGray)
+		if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV  && d.vi->format.colorFamily != cfGray)
 		{
-			vsapi->setError(out, "deJitter: only RGB or YUV or Gray color formats allowed");
+			vsapi->mapSetError(out, "deJitter: only RGB or YUV or Gray color formats allowed");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		
-		if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+		if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 		{
-			vsapi->setError(out, "deJitter: Half float formats not allowed ");
+			vsapi->mapSetError(out, "deJitter: Half float formats not allowed ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		if (d.vi->format->subSamplingH != 0 || d.vi->format->subSamplingW != 0)
+		if (d.vi->format.subSamplingH != 0 || d.vi->format.subSamplingW != 0)
 		{
-			vsapi->setError(out, "deJitter: color planes should have no subsampling");
+			vsapi->mapSetError(out, "deJitter: color planes should have no subsampling");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		temp = int64ToIntS(vsapi->propGetInt(in, "jmax", 0, &err));
+		temp = int64ToIntS(vsapi->mapGetInt(in, "jmax", 0, &err));
 
 		if (err)
 			d.jmax = 40;
 		else if (temp < 1 || temp > d.vi->width / 4)
 		{
-			vsapi->setError(out, "deJitter: jmax value must be between 1 and quarter of frame width");
+			vsapi->mapSetError(out, "deJitter: jmax value must be between 1 and quarter of frame width");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		d.jmax = temp;
 
-		temp = int64ToIntS(vsapi->propGetInt(in, "wsyn", 0, &err));
+		temp = int64ToIntS(vsapi->mapGetInt(in, "wsyn", 0, &err));
 
 		if (err)
 			d.wsyn = 20;
 		else if (temp < 0 || temp > 40)
 		{
-			vsapi->setError(out, "deJitter: wsyn width of sync signal be between 0 and 40");
+			vsapi->mapSetError(out, "deJitter: wsyn width of sync signal be between 0 and 40");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		else
 			d.wsyn = temp;
-		d.thresh = (float)vsapi->propGetFloat(in, "thresh", 0, &err);
+		d.thresh = (float)vsapi->mapGetFloat(in, "thresh", 0, &err);
 
 		if (err)
 			d.thresh = 0.08f;
 		else if (d.thresh < 0.01f || d.thresh > 0.5f)
 		{
-			vsapi->setError(out, "deJitter: thresh can be between 0.01 and 0.5 only");
+			vsapi->mapSetError(out, "deJitter: thresh can be between 0.01 and 0.5 only");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -340,12 +338,19 @@ typedef struct {
 		// need to modify no shared data at all when the filter is running.
 		// For more complicated filters, fmParallelRequests is usually easier to achieve as it can
 		// be prefetched in parallel but the actual processing is serialized.
-		// The others can be considered special cases where fmSerial is useful to source filters and
+		// The others can be considered special cases where fmFrameState is useful to source filters and
 		// fmUnordered is useful when a filter's state may change even when deciding which frames to
 		// prefetch (such as a cache filter).
 		// If your filter is really fast (such as a filter that only resorts frames) you should set the
 		// nfNoCache flag to make the caching work smoother.
-		vsapi->createFilter(in, out, "deJitter", dejitterInit, dejitterGetFrame, dejitterFree, fmParallel, 0, data, core);
+		dejitterInit(in, out, (void **)&data, core, vsapi);
+		if (vsapi->mapGetError(out))
+		{
+			free(data);
+			return;
+		}
+		VSFilterDependency deps[] = { { data->node, rpGeneral } };
+		vsapi->createVideoFilter(out, "deJitter", data->vi, dejitterGetFrame, dejitterFree, fmParallel, deps, 1, data, core);
 	}
 
 	//////////////////////////////////////////

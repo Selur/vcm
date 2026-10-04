@@ -9,7 +9,7 @@ Mean value is used if within tol .2 Nov 2020
 #include "math.h"
 */
 typedef struct {
-	VSNodeRef* node;
+	VSNode* node;
 	const VSVideoInfo* vi;
 	float tol;	// start %age value of greyness
 	int grid;
@@ -63,11 +63,9 @@ int setOffsets(int* offsets, int x, int y, int pitch)
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC meanInit(VSMap* in, VSMap* out, void** instanceData,
-	VSNode* node, VSCore* core, const VSAPI* vsapi) 
+static void meanInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	MeanData* d = (MeanData*)*instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 
 }
 
@@ -80,10 +78,9 @@ static void VS_CC meanInit(VSMap* in, VSMap* out, void** instanceData,
 	// upstream filters.
 	// Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 	// do the actual processing.
-	static const VSFrameRef* VS_CC meanGetFrame(int n, int activationReason, void** instanceData,
-		void** frameData, VSFrameContext * frameCtx, VSCore * core, const VSAPI * vsapi)
-	{
-		MeanData* d = (MeanData*)*instanceData;
+	static const VSFrame* VS_CC meanGetFrame(int n, int activationReason, void* instanceData,
+		void** frameData, VSFrameContext * frameCtx, VSCore * core, const VSAPI * vsapi) {
+		MeanData* d = (MeanData *)instanceData;
 
 		if (activationReason == arInitial)
 		{
@@ -92,26 +89,26 @@ static void VS_CC meanInit(VSMap* in, VSMap* out, void** instanceData,
 		}
 		else if (activationReason == arAllFramesReady)
 		{
-			const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+			const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
 			// The reason we query this on a per frame basis is because we want our filter
 			// to accept clips with varying dimensions. If we reject such content using d->vi
 			// would be better.
-			const VSFormat* fi = d->vi->format;
+			const VSVideoFormat* fi = &d->vi->format;
 			int height = vsapi->getFrameHeight(src, 0);
 			int width = vsapi->getFrameWidth(src, 0);
 			int nbytes = fi->bytesPerSample;
 			int nbits = fi->bitsPerSample;
-			VSFrameRef* dst = vsapi->copyFrame(src, core);
+			VSFrame* dst = vsapi->copyFrame(src, core);
 
 
 			int noff = d->grid * d->grid;	// max number of points
-			int* offsets = (int*)vs_aligned_malloc <int>(sizeof(int) * d->grid * d->grid, 32);
+			int* offsets = (int*)vsh_aligned_malloc <int>(sizeof(int) * d->grid * d->grid, 32);
 
 
 			for (int plane = 0; plane < fi->numPlanes; plane++)
 			{
-				if (plane == 0 || fi->colorFamily == cmRGB
-					|| (fi->colorFamily == cmYUV && fi->subSamplingH == 0 && fi->subSamplingW == 0)
+				if (plane == 0 || fi->colorFamily == cfRGB
+					|| (fi->colorFamily == cfYUV && fi->subSamplingH == 0 && fi->subSamplingW == 0)
 					)
 				{
 					const uint8_t* srcp = vsapi->getReadPtr(src, plane);
@@ -178,7 +175,7 @@ static void VS_CC meanInit(VSMap* in, VSMap* out, void** instanceData,
 				}
 			}
 
-			vs_aligned_free(offsets);
+			vsh_aligned_free(offsets);
 			vsapi->freeFrame(src);
 			return dst;
 		}
@@ -201,21 +198,21 @@ static void VS_CC meanCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 	int err;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "Mean: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "Mean: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Mean: Half float formats not allowed ");
+		vsapi->mapSetError(out, "Mean: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.grid = int64ToIntS(vsapi->propGetInt(in, "grid", 0, &err));
+	d.grid = int64ToIntS(vsapi->mapGetInt(in, "grid", 0, &err));
 	if (err)
 	{
 		d.grid = 5;
@@ -224,13 +221,13 @@ static void VS_CC meanCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 	{
 		if (d.grid < 3 || d.grid > 11 || (d.grid % 2) == 0)
 		{
-			vsapi->setError(out, "Mean: value of grid need to be an odd number between 3 and 11");
+			vsapi->mapSetError(out, "Mean: value of grid need to be an odd number between 3 and 11");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	d.tol = (float)vsapi->propGetFloat(in, "tol", 0, &err);
+	d.tol = (float)vsapi->mapGetFloat(in, "tol", 0, &err);
 
 	if (err)
 	{
@@ -240,7 +237,7 @@ static void VS_CC meanCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 	{
 		if (d.tol < 0.01 || d.tol > 1.0)
 		{
-			vsapi->setError(out, "Mean: tol must have a value between 0.01 and 1.0");
+			vsapi->mapSetError(out, "Mean: tol must have a value between 0.01 and 1.0");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -255,7 +252,17 @@ static void VS_CC meanCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "Mean", meanInit, meanGetFrame, meanFree, fmParallel, 0, data, core);
+	meanInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "Mean", data->vi, meanGetFrame, meanFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

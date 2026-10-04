@@ -35,7 +35,7 @@ Oct, 2014, 20 Aug 2020
 //---------------------------------------------------------------------------------
 typedef struct 
 {
-    VSNodeRef *node[2];	
+    VSNode *node[2];	
     const VSVideoInfo *vi[2];
 
 	bool connect4; // if false connect 8 used
@@ -48,10 +48,9 @@ typedef struct
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC amplitudeInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void amplitudeInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     AmplitudeData *d = (AmplitudeData *) * instanceData;
-    vsapi->setVideoInfo(d->vi[0], 1, node);
 	
 }
 //--------------------------------------------------------------------------
@@ -262,10 +261,9 @@ void postSegmentProcess(finc * wkp, const int wkpitch,
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, void **instanceData,
-							void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    AmplitudeData *d = (AmplitudeData *) * instanceData;
+static const VSFrame *VS_CC amplitudeGetFrame(int n, int activationReason, void *instanceData,
+							void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    AmplitudeData *d = (AmplitudeData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -278,15 +276,15 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
     }
 	else if (activationReason == arAllFramesReady)
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
 
-		const VSFormat *fi = d->vi[0]->format;
+		const VSVideoFormat *fi = &d->vi[0]->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 		
-		const VSFrameRef * s2frame = d->sclip? vsapi->getFrameFilter(n, d->node[1], frameCtx) : src;
+		const VSFrame * s2frame = d->sclip? vsapi->getFrameFilter(n, d->node[1], frameCtx) : src;
         
-        VSFrameRef *dst = vsapi->newVideoFrame(fi, width, height, src, core);
+        VSFrame *dst = vsapi->newVideoFrame(fi, width, height, src, core);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
@@ -294,10 +292,10 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
 
 		int psize = height * width ;
 		// get a work frame to serve as buffers
-		VSFrameRef *work = vsapi->newVideoFrame(fi, width * ( sizeof(int) + sizeof(int) + 1 + sizeof(void*) + fi->bytesPerSample), height, src, core);
+		VSFrame *work = vsapi->newVideoFrame(fi, width * ( sizeof(int) + sizeof(int) + 1 + sizeof(void*) + fi->bytesPerSample), height, src, core);
 		uint8_t* wp = vsapi->getWritePtr(work, 0);
 		// for large buffers it seems asking a new video frame is faster
-		//	vs_aligned_malloc <uint8_t>(psize * (sizeof(int) + sizeof(int) + 8 + sizeof(void*) + fi->bytesPerSample), 32);
+		//	vsh_aligned_malloc <uint8_t>(psize * (sizeof(int) + sizeof(int) + 8 + sizeof(void*) + fi->bytesPerSample), 32);
 			
 		// specify pointers to individual buffers
 		int * dist = (int *)wp;			// - wp
@@ -331,7 +329,7 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
 			
 			if ( d->sm[plane] == 0 && d->sh[plane] != 0)
 			{
-				vs_bitblt(dstp, dst_stride, srcp, src_stride, wd * fi->bytesPerSample, ht);
+				bitblt(dstp, dst_stride, srcp, src_stride, wd * fi->bytesPerSample, ht);
 			}
 
 			
@@ -401,8 +399,8 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
 						const float ** pixelsort = (const float **) pixelsort8;
 						float * buf = ( float *) buf8; 
 						const float * s2p = ( float *)s2ptr;
-						float min = plane == 0 || fi->colorFamily == cmRGB ? 0.0f : -0.5f;
-						float max = plane == 0 || fi->colorFamily == cmRGB ? 1.0f :  0.5f;
+						float min = plane == 0 || fi->colorFamily == cfRGB ? 0.0f : -0.5f;
+						float max = plane == 0 || fi->colorFamily == cfRGB ? 1.0f :  0.5f;
 					// uses appropriate frame as d->sclip points to that clip frame
 						preSegmentProcess(buf, wd, s2p , pitch, wd, ht,  pixelsort);
 
@@ -420,7 +418,7 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
 
 			else if( d->sm[plane] == 0 && d->sh[plane] == 0) // this plane not opted for
 			{
-				vs_bitblt(dstp, dst_stride, srcp, src_stride, wd * fi->bytesPerSample, ht);
+				bitblt(dstp, dst_stride, srcp, src_stride, wd * fi->bytesPerSample, ht);
 			}
 		}
 	
@@ -430,7 +428,7 @@ static const VSFrameRef *VS_CC amplitudeGetFrame(int n, int activationReason, vo
 	//	free (dist);
 	//	free(tag);
 		vsapi->freeFrame(work);
-	//	vs_aligned_free(wp);
+	//	vsh_aligned_free(wp);
 		vsapi->freeFrame(src);
 		if (d->sclip)
 			vsapi->freeFrame(s2frame);
@@ -461,22 +459,24 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
     int err;
 	int temp;
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node[0] = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node[0] = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi[0] = vsapi->getVideoInfo(d.node[0]);
-	if (d.vi[0]->format->colorFamily != cmRGB && d.vi[0]->format->colorFamily != cmYUV && d.vi[0]->format->colorFamily != cmGray)
+    d.node[1] = NULL;
+    d.vi[1] = NULL;
+	if (d.vi[0]->format.colorFamily != cfRGB && d.vi[0]->format.colorFamily != cfYUV && d.vi[0]->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "Amp: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "Amp: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node[0]);
 		return;
 	}
-	if (d.vi[0]->format->sampleType == stFloat && d.vi[0]->format->bitsPerSample == 16)
+	if (d.vi[0]->format.sampleType == stFloat && d.vi[0]->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Amp: Half float formats not allowed ");
+		vsapi->mapSetError(out, "Amp: Half float formats not allowed ");
 		vsapi->freeNode(d.node[0]);
 		return;
 	}
 
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "connect4", 0, &err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "connect4", 0, &err));
 
 	if(err)
 		d.connect4 = true;
@@ -484,17 +484,17 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 	{
 		if ( temp < 0 || temp > 1)
 		{
-			vsapi->setError(out, "Amp: connect4 must  be 0  to use 8 connect or 1 for  4 connect");
+			vsapi->mapSetError(out, "Amp: connect4 must  be 0  to use 8 connect or 1 for  4 connect");
 			vsapi->freeNode(d.node[0]);			
 			return;
 		}
 
 		d.connect4 = temp == 0 ? false : true;
 	}
-	temp = vsapi->propNumElements(in,"sh");
+	temp = vsapi->mapNumElements(in,"sh");
 	if (temp == -1 || temp > 3)
 	{
-			vsapi->setError(out, "Amp: sh array must specify not more than 3 and at least first of 3 values corresponding to 3 planes");
+			vsapi->mapSetError(out, "Amp: sh array must specify not more than 3 and at least first of 3 values corresponding to 3 planes");
 			vsapi->freeNode(d.node[0]);			
 			return;
 	}
@@ -503,7 +503,7 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 		
 		for (int i = 0; i < temp; i++)
 		{
-			d.sh[i] = int64ToIntS(vsapi->propGetInt(out, "sh", i, 0));
+			d.sh[i] = int64ToIntS(vsapi->mapGetInt(in, "sh", i, 0));
 			
 		}
 		for (int i = temp; i < 3; i++)
@@ -515,7 +515,7 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 		{
 			if(d.sh[i] < -5 || d.sh[i] > 5)
 			{
-				vsapi->setError(out, "Amp: sh values must be between - 5 and 5. If 0 no sharpening will be done");
+				vsapi->mapSetError(out, "Amp: sh values must be between - 5 and 5. If 0 no sharpening will be done");
 				vsapi->freeNode(d.node[0]);
 				return;
 			}
@@ -523,10 +523,10 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 		}
 	}
 
-	temp = vsapi->propNumElements(in,"sm");
+	temp = vsapi->mapNumElements(in,"sm");
 	if (temp == -1 || temp > 3)
 	{
-		vsapi->setError(out, "Amp: sm array must specify not more than 3 and at least first of 3 values corresponding to 3 planes");
+		vsapi->mapSetError(out, "Amp: sm array must specify not more than 3 and at least first of 3 values corresponding to 3 planes");
 		vsapi->freeNode(d.node[0]);
 		return;
 	}
@@ -534,7 +534,7 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 	{
 		for (int i = 0; i < temp; i++)
 		{
-			d.sm[i] = int64ToIntS(vsapi->propGetInt(out, "sm", i, 0));
+			d.sm[i] = int64ToIntS(vsapi->mapGetInt(in, "sm", i, 0));
 
 		}
 		for (int i = temp; i < 3; i++)
@@ -546,7 +546,7 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 		{
 			if (d.sm[i] < 0 || d.sm[i] > 10)
 			{
-				vsapi->setError(out, "Amp: sm values must be between 0 and 5. If 0 no smoothening will be done");
+				vsapi->mapSetError(out, "Amp: sm values must be between 0 and 5. If 0 no smoothening will be done");
 				vsapi->freeNode(d.node[0]);
 				return;
 			}
@@ -562,13 +562,13 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
 
 	if( temp == 0)
 	{
-		vsapi->setError(out, "Amp: all sh and sm values are zero so no processing is opted");
+		vsapi->mapSetError(out, "Amp: all sh and sm values are zero so no processing is opted");
 		vsapi->freeNode(d.node[0]);			
 		return;
 	}
 
 
-	temp = !!int64ToIntS(vsapi->propGetInt(in, "useclip",0,&err));
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "useclip",0,&err));
 	if(err)
 
 		d.sclip = false;
@@ -581,20 +581,20 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
     
 	if (d.sclip)
 	{
-		d.node[1] = vsapi->propGetNode(in, "sclip", 0, &err);
+		d.node[1] = vsapi->mapGetNode(in, "sclip", 0, &err);
 
 		if(err)
 		{
-			vsapi->setError(out, "Amp: sclip must be specified for useclip option");
+			vsapi->mapSetError(out, "Amp: sclip must be specified for useclip option");
 			vsapi->freeNode(d.node[0]);
 			return;
 		}
 
 		 d.vi[1] = vsapi->getVideoInfo(d.node[1]);
 
-		if (!isConstantFormat(d.vi[0]) || !isSameFormat(d.vi[0], d.vi[1]) || d.vi[0]->numFrames != d.vi[1]->numFrames )
+		if (!isConstantVideoFormat(d.vi[0]) || !isSameVideoInfo(d.vi[0], d.vi[1]) || d.vi[0]->numFrames != d.vi[1]->numFrames )
 		{
-			vsapi->setError(out, "Amp: for use clip option both clips must have constant and identical formats and same number of frames");
+			vsapi->mapSetError(out, "Amp: for use clip option both clips must have constant and identical formats and same number of frames");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode( d.node[1]);
 			return;
@@ -625,12 +625,23 @@ static void VS_CC amplitudeCreate(const VSMap *in, VSMap *out, void *userData, V
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters, fmParallelRequests is usually easier to achieve as it can
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If your filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "Amp", amplitudeInit, amplitudeGetFrame, amplitudeFree, fmParallel, 0, data, core);
+    amplitudeInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[2];
+    int ndeps = 0;
+    for (int i = 0; i < 2; i++)
+    	if (data->node[i] != NULL)
+    		deps[ndeps++] = { data->node[i], rpGeneral };
+    vsapi->createVideoFilter(out, "Amp", data->vi[0], amplitudeGetFrame, amplitudeFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

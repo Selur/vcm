@@ -14,7 +14,7 @@ This plugin needs any one of libfftw3f-3.dll, FFTW3 dll, fftw.dll to reside in p
 (may be windows\system32 folder)
 
 Author V.C.Mohan.
-Jun 2015, 18 May 2021
+Jun 2015, 18 May 2021, 18 dec 2025
 
 Copyright (C) <2006, 2021>  <V.C.Mohan>
 
@@ -45,7 +45,7 @@ see <http://www.gnu.org/licenses/>.
 #include "F2QuiverSpectralDisplay.h"
 */
 typedef struct {
-		VSNodeRef *node;
+		VSNode *node;
 		const VSVideoInfo *vi;
 		
 		bool  	test;		// is this a test?
@@ -85,13 +85,12 @@ void designFilter2D(int* FSpec, int npts, float* filter, int ht, int wd);
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void f2quiverInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     F2QuiverData *d = (F2QuiverData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);
 	
 
-	int * facbuf =  vs_aligned_malloc<int> (sizeof(int) * 64, 32);	//maximum 64 factors, first is factor, second is dividend to be factored. At 
+	int * facbuf =  vsh_aligned_malloc<int> (sizeof(int) * 64, 32);	//maximum 64 factors, first is factor, second is dividend to be factored. At 
 								// a value of 1 no more factors
 	
 			//	best dimensions for speed
@@ -102,13 +101,12 @@ static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 	d->wbest = getBestDim(wdEven + ADDSAFE, facbuf);
 	d->hbest = getBestDim(htEven + ADDSAFE, facbuf);
 
-	vs_aligned_free(facbuf);
-
 	if( d->test)
 	{
 		d->wbest = getBestDim(d->vi->width , facbuf);
 		d->hbest = getBestDim(d->vi->height ,facbuf);
 	}
+	vsh_aligned_free(facbuf);
 	d->frqwidth = (d->wbest / 2) + 1;
 	int f2qsize = d->hbest * d->frqwidth;
 
@@ -117,44 +115,47 @@ static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 
 	if (!ok)
 	{
-		vsapi->setError(out, "vcm.f2quiver: could not load any of the fft dll or get required fnctions");
+		vsapi->mapSetError(out, "vcm.f2quiver: could not load any of the fft dll or get required fnctions");
 		if (d->hinstLib != NULL)
 			FreeLibrary(d->hinstLib);
 		vsapi->freeNode(d->node);
 		return;
 	}
-	// buffers 
-	d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
-	
-	d->outBuf = (fftwf_complex*)d->fftwf_malloc (sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
-	
 
-	if(d->inBuf == NULL || d->outBuf == NULL )
 	{
-		vsapi->setError(out, "F2Quiver: unexpectedly buffers not allocated error");
-		vsapi->freeNode(d->node);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
-	}
-	
+		std::lock_guard<std::mutex> guard(g_mutex);
 
-	d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE );
-	d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE );
+		// buffers 
+		d->inBuf = (float*)d->fftwf_malloc(sizeof(float) * d->wbest * d->hbest);
 
-	if(  d->pf == NULL || d->pinv == NULL)
-	{
-		vsapi->setError(out, "F2Quiver: unexpected  fft plans  error");
-		vsapi->freeNode(d->node);
-		d->fftwf_free(d->inBuf);
-		d->fftwf_free(d->outBuf);
-		if (d->hinstLib != NULL)
-			FreeLibrary(d->hinstLib);
-		free(d);
-		return;
+		d->outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * f2qsize);//  is only a safeguard not really reqd
+
+
+		if (d->inBuf == NULL || d->outBuf == NULL)
+		{
+			vsapi->mapSetError(out, "F2Quiver: unexpectedly buffers not allocated error");
+			vsapi->freeNode(d->node);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			return;
+		}
+
+
+		d->pf = d->fftwf_plan_dft_r2c_2d(d->hbest, d->wbest, d->inBuf, d->outBuf, FFTW_MEASURE);
+		d->pinv = d->fftwf_plan_dft_c2r_2d(d->hbest, d->wbest, d->outBuf, d->inBuf, FFTW_MEASURE);
+
+		if (d->pf == NULL || d->pinv == NULL)
+		{
+			vsapi->mapSetError(out, "F2Quiver: unexpected  fft plans  error");
+			vsapi->freeNode(d->node);
+			d->fftwf_free(d->inBuf);
+			d->fftwf_free(d->outBuf);
+			if (d->hinstLib != NULL)
+				FreeLibrary(d->hinstLib);
+			return;
+		}
 	}
-	int nbits = d->vi->format->bitsPerSample;
+	int nbits = d->vi->format.bitsPerSample;
 
 	d->logLUT = NULL;
 	if(d->morph && nbits <= 12 )
@@ -162,7 +163,7 @@ static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		// only up to 12 bits input this buffer is used
 		int nval = 1 << nbits;
 
-		d->logLUT = vs_aligned_malloc <float>( sizeof(float) * nval, 32);
+		d->logLUT = vsh_aligned_malloc <float>( sizeof(float) * nval, 32);
 
 		for (int i = 0; i < nval; i ++)
 		{
@@ -170,7 +171,7 @@ static void VS_CC f2quiverInit(VSMap *in, VSMap *out, void **instanceData, VSNod
 		}
 	}
 	
-	d->FreqFilter = vs_aligned_malloc <float>(sizeof(float) * f2qsize, 32);
+	d->FreqFilter = vsh_aligned_malloc <float>(sizeof(float) * f2qsize, 32);
 
 		// initialize 
 	for (int i = 0; i < f2qsize; i ++)
@@ -350,10 +351,9 @@ void getFilteredOutput2D(F2QuiverData* d, float* inBuf, fftwf_complex* outBuf,
 
 }
 //--------------------------------------------------------------------------------------------------------------------------
-static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	F2QuiverData* d = (F2QuiverData*)*instanceData;
+static const VSFrame* VS_CC f2qtestGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	F2QuiverData* d = (F2QuiverData *)instanceData;
 
 	if (activationReason == arInitial) {
 		// Request the source frame on the first call
@@ -361,14 +361,14 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat* fi = d->vi->format;
+		const VSVideoFormat* fi = &d->vi->format;
 		int ht = vsapi->getFrameHeight(src, 0);
 		int wd = vsapi->getFrameWidth(src, 0);
-		VSFrameRef* dst = vsapi->copyFrame(src, core);
+		VSFrame* dst = vsapi->copyFrame(src, core);
 		// float input
 		int iwidth = d->wbest;
 		int owidth = 2 + d->wbest / 2;
@@ -376,7 +376,7 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 		//float* inBuf = (float*)d->fftwf_malloc(sizeof(float) * iwidth * d->hbest);
 		//fftwf_complex* outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex) * owidth * d->hbest);
 		// process Green of RGB or Y of YUV or Grey
-		int plane = fi->colorFamily == cmRGB ? 1 : 0;
+		int plane = fi->colorFamily == cfRGB ? 1 : 0;
 
 		const uint8_t* srcp = vsapi->getReadPtr(src, plane);
 		int src_stride = vsapi->getStride(src, plane);
@@ -398,7 +398,7 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 			displaySpectraAndFilters2D(d, d->inBuf, d->outBuf, srcp, dstp,
 				pitch, ht, wd, Grey, max);
 			
-			if (fi->colorFamily != cmRGB)
+			if (fi->colorFamily != cfRGB)
 			{
 				for (int plane = 1; plane < npl; plane++)
 				{
@@ -427,7 +427,7 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 
 			displaySpectraAndFilters2D(d, d->inBuf, d->outBuf, sp, dp,
 				pitch, ht, wd, Grey, max);
-			if (fi->colorFamily != cmRGB)
+			if (fi->colorFamily != cfRGB)
 			{
 				for (int plane = 1; plane < npl; plane++)
 				{
@@ -457,7 +457,7 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 
 			displaySpectraAndFilters2D(d, d->inBuf, d->outBuf, sp, dp,
 				pitch, ht, wd, Grey, max);
-			if (fi->colorFamily != cmRGB)
+			if (fi->colorFamily != cfRGB)
 			{
 				for (int plane = 1; plane < npl; plane++)
 				{
@@ -476,13 +476,13 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 		}
 
 
-		if (fi->colorFamily == cmRGB)
+		if (fi->colorFamily == cfRGB)
 		{
 			// copy Green on to Blu and Red planes
-			vs_bitblt(vsapi->getWritePtr(dst, 0), vsapi->getStride(dst, 0),
+			bitblt(vsapi->getWritePtr(dst, 0), vsapi->getStride(dst, 0),
 				vsapi->getWritePtr(dst, 1), vsapi->getStride(dst, 1),
 				wd * nbytes, ht);
-			vs_bitblt(vsapi->getWritePtr(dst, 2), vsapi->getStride(dst, 2),
+			bitblt(vsapi->getWritePtr(dst, 2), vsapi->getStride(dst, 2),
 				vsapi->getWritePtr(dst, 1), vsapi->getStride(dst, 1),
 				wd * nbytes, ht);
 		}
@@ -496,10 +496,9 @@ static const VSFrameRef* VS_CC f2qtestGetFrame(int n, int activationReason, void
 
 
 //---------------------------------------------------------------------------------------------------------------------------
-static const VSFrameRef *VS_CC f2quiverGetFrame(int n, int activationReason, void **instanceData, 
-						void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    F2QuiverData *d = (F2QuiverData *) * instanceData;
+static const VSFrame *VS_CC f2quiverGetFrame(int n, int activationReason, void *instanceData, 
+						void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    F2QuiverData *d = (F2QuiverData *)instanceData;
 
     if (activationReason == arInitial) {
         // Request the source frame on the first call
@@ -507,19 +506,19 @@ static const VSFrameRef *VS_CC f2quiverGetFrame(int n, int activationReason, voi
     } 
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int ht = vsapi->getFrameHeight(src, 0);
         int wd = vsapi->getFrameWidth(src, 0);
-        VSFrameRef *dst = vsapi->copyFrame(src, core);
+        VSFrame *dst = vsapi->copyFrame(src, core);
 
 		//inBuf = (float*)d->fftwf_malloc (sizeof(float) * iwidth * d->hbest);
 		//outBuf = (fftwf_complex*)d->fftwf_malloc(sizeof(fftwf_complex)* owidth * d->hbest);
 		// process all of RGB and Y of YUV or Gray
-        int np = fi->colorFamily == cmRGB ? 3 : 1;
+        int np = fi->colorFamily == cfRGB ? 3 : 1;
 		int nbits = fi->sampleType == stInteger ? fi->bitsPerSample : 0;
 		int nbytes = fi->bytesPerSample;
 
@@ -572,12 +571,15 @@ static const VSFrameRef *VS_CC f2quiverGetFrame(int n, int activationReason, voi
 // Free all allocated data on filter destruction
 static void VS_CC f2quiverFree(void *instanceData, VSCore *core, const VSAPI *vsapi) 
 {
+
     F2QuiverData *d = (F2QuiverData *)instanceData;
     vsapi->freeNode(d->node);
 	if (d->FreqFilter != NULL)
-		vs_aligned_free(d->FreqFilter);
+		vsh_aligned_free(d->FreqFilter);
 	if( d->logLUT != NULL)
-		vs_aligned_free(d->logLUT);
+		vsh_aligned_free(d->logLUT);
+
+	std::lock_guard<std::mutex> guard(g_mutex);
 	d->fftwf_destroy_plan (d->pf);
 	d->fftwf_destroy_plan ( d->pinv);
 	d->fftwf_free(d->inBuf);
@@ -599,26 +601,26 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	int temp;
 	
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
    
-	if (!isConstantFormat(d.vi) && (d.vi->format->colorFamily != cmRGB 
-						&& d.vi->format->colorFamily != cmYUV 	
-						&& d.vi->format->colorFamily != cmGray))
+	if (!isConstantVideoFormat(d.vi) && (d.vi->format.colorFamily != cfRGB 
+						&& d.vi->format.colorFamily != cfYUV 	
+						&& d.vi->format.colorFamily != cfGray))
 	{
-        vsapi->setError(out, "F2Quiver: only constant format RGB YUV or Gray  input supported");
+        vsapi->mapSetError(out, "F2Quiver: only constant format RGB YUV or Gray  input supported");
         vsapi->freeNode(d.node);
         return;
     }
 	
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "F2Quiver: Half float formats not allowed ");
+		vsapi->mapSetError(out, "F2Quiver: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	temp = !!vsapi->propGetInt(in, "ham", 0, &err);
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "ham", 0, &err));
 	if (err)
 		d.ham = false;
 	else
@@ -626,14 +628,14 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	if (d.ham)
 	{
 		int maxfrad = (d.vi->height > d.vi->width ? d.vi->height : d.vi->width);
-		temp = vsapi->propGetInt(in, "frad", 0, &err);
+		temp = int64ToIntS(vsapi->mapGetInt(in, "frad", 0, &err));
 		if (err)
 			temp = 32;
 		else
 		{
 			if (temp < 10 || temp > 50)
 			{
-				vsapi->setError(out, "F2Quiver: frad being %age of min dimension be 10 to 50 only");
+				vsapi->mapSetError(out, "F2Quiver: frad being %age of min dimension be 10 to 50 only");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -641,25 +643,25 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		d.frad = (maxfrad * temp) / 100;
 	}
 
-	temp = !!vsapi->propGetInt(in, "test", 0, &err);
+	temp = !!int64ToIntS(vsapi->mapGetInt(in, "test", 0, &err));
 	if(err)
 		d.test = false;
 	else
 		d.test = temp == 0 ? false: true;
 	
 
-	d.npoints = vsapi->propNumElements(in, "fspec");
+	d.npoints = vsapi->mapNumElements(in, "fspec");
 
 	if(d.npoints < 5 || (d.npoints % 5 ) != 0 || d.npoints > 60)
 	{
 		
-		vsapi->setError(out, "F2Quiver: fspec at least one and upto 12 filter specifications be given. Each filter is specified as a set of 5 integer values.");
+		vsapi->mapSetError(out, "F2Quiver: fspec at least one and upto 12 filter specifications be given. Each filter is specified as a set of 5 integer values.");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
 	for ( int i = 0; i < d.npoints; i ++)
-		d.Fspec[i] = vsapi->propGetInt(in, "fspec", i, 0);
+		d.Fspec[i] = int64ToIntS(vsapi->mapGetInt(in, "fspec", i, 0));
 	
 	for ( int i = 0; i < d.npoints; i += 5)
 	{
@@ -676,13 +678,13 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		{
 		
 			
-			vsapi->setError(out, "F2Quiver:the first number specifying symmetry of each filter must  be from 1 to 5");
+			vsapi->mapSetError(out, "F2Quiver:the first number specifying symmetry of each filter must  be from 1 to 5");
 			vsapi->freeNode(d.node);
 			return;
 		}
 		if (type < 1 || type > 5)
 		{			
-			vsapi->setError(out, "F2Quiver:the second number specifying type of each filter must be from 1 to 5");
+			vsapi->mapSetError(out, "F2Quiver:the second number specifying type of each filter must be from 1 to 5");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -692,7 +694,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 			if (frq1 < 0 || frq1 >= NYQUIST / 2)
 			{
 				
-				vsapi->setError(out, "F2Quiver:the third number  specifying freq1 of each filter must be between 0 and %d");
+				vsapi->mapSetError(out, "F2Quiver:the third number  specifying freq1 of each filter must be between 0 and %d");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -702,7 +704,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 			if (frq1 < 0 || frq2 > NYQUIST / 2 || frq2 <= frq1)
 			{
 				
-				vsapi->setError(out, "F2Quiver:for  symetry 4 and type 5 filter 3rd value freq1 must be positive and less than the 4th value freq2.");
+				vsapi->mapSetError(out, "F2Quiver:for  symetry 4 and type 5 filter 3rd value freq1 must be positive and less than the 4th value freq2.");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -713,7 +715,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 			{
 				if (fan1 < 1 || fan1 > 179 || (fan1 > 89 && fan1 < 91))
 				{
-					vsapi->setError(out, "F2Quiver:for the fan filter the third number specifying angle1 must be between 1 and 89 or 91 to 179.");
+					vsapi->mapSetError(out, "F2Quiver:for the fan filter the third number specifying angle1 must be between 1 and 89 or 91 to 179.");
 					vsapi->freeNode(d.node);
 					return;
 				}
@@ -723,13 +725,13 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 				// band pass or reject
 				if (fan1 < 1 || fan1 > 178 || (fan1 > 88 && fan1 < 91))
 				{
-					vsapi->setError(out, "F2Quiver:for the fan filter the angle1 must be between 1 and 88 or 91 and 178");
+					vsapi->mapSetError(out, "F2Quiver:for the fan filter the angle1 must be between 1 and 88 or 91 and 178");
 					vsapi->freeNode(d.node);	
 					return;
 				}
 				if (fan2 <= fan1 || (fan1 < 89 && fan2 > 89) || fan2 > 179)
 				{
-					vsapi->setError(out, "F2Quiver:for the fan filter the third number specifying angle1 must be between 1 and 88 or 91 to 178.");
+					vsapi->mapSetError(out, "F2Quiver:for the fan filter the third number specifying angle1 must be between 1 and 88 or 91 to 178.");
 					vsapi->freeNode(d.node);
 					return;
 				}
@@ -740,7 +742,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 		{
 			if (frq1 < -NYQUIST / 2 || frq1 > NYQUIST / 2 || frq2 < -NYQUIST / 2 || frq2 > NYQUIST / 2)
 			{
-				vsapi->setError(out, "F2Quiver:for the filterof symetry 5, the xfreq  and yfreq must be within + or - 250");
+				vsapi->mapSetError(out, "F2Quiver:for the filterof symetry 5, the xfreq  and yfreq must be within + or - 250");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -748,13 +750,13 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 		if (deg < 1 || deg > 24)
 		{			
-			vsapi->setError(out, "F2Quiver: the fifth value of each filter  must be from 1 to 24 only.");
+			vsapi->mapSetError(out, "F2Quiver: the fifth value of each filter  must be from 1 to 24 only.");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	temp = vsapi->propGetInt(in, "morph", 0, &err);
+	temp = !! int64ToIntS(vsapi->mapGetInt(in, "morph", 0, &err));
 
 	if(err)
 	{ 
@@ -764,7 +766,7 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 	{
 		if ( temp < 0 || temp > 1)
 		{
-			vsapi->setError(out, "F2Quiver: hm must be  either 0 or 1");
+			vsapi->mapSetError(out, "F2Quiver: hm must be  either 0 or 1");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -774,14 +776,14 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
 
 	if( d.test)
 	{
-		d.gamma = vsapi->propGetFloat(in, "gamma", 0, &err);
+		d.gamma = (float)vsapi->mapGetFloat(in, "gamma", 0, &err);
 		if(err)
-			d.gamma = 0.05;
+			d.gamma = 0.05f;
 		else
 		{
 			if ( d.gamma < 1e-5 || d.gamma > 5.0)
 			{
-				vsapi->setError(out, "F2Quiver: gamma must be non zero +ve and less than 5.0");
+				vsapi->mapSetError(out, "F2Quiver: gamma must be non zero +ve and less than 5.0");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -795,9 +797,33 @@ static void VS_CC f2quiverCreate(const VSMap *in, VSMap *out, void *userData, VS
     data = (F2QuiverData *) malloc(sizeof(d));
     *data = d;
 	if (d.test)
-		vsapi->createFilter(in, out, "F2Quiver", f2quiverInit, f2qtestGetFrame, f2quiverFree, fmParallelRequests, 0, data, core);
+	{
+		f2quiverInit(in, out, (void **)&data, core, vsapi);
+		if (vsapi->mapGetError(out))
+		{
+			free(data);
+			return;
+		}
+		VSFilterDependency deps[1];
+		int ndeps = 0;
+		if (data->node != NULL)
+			deps[ndeps++] = { data->node, rpGeneral };
+		vsapi->createVideoFilter(out, "F2Quiver", data->vi, f2qtestGetFrame, f2quiverFree, fmParallelRequests, deps, ndeps, data, core);
+	}
 	else
-		vsapi->createFilter(in, out, "F2Quiver", f2quiverInit, f2quiverGetFrame, f2quiverFree, fmParallelRequests, 0, data, core);
+	{
+		f2quiverInit(in, out, (void **)&data, core, vsapi);
+		if (vsapi->mapGetError(out))
+		{
+			free(data);
+			return;
+		}
+		VSFilterDependency deps[1];
+		int ndeps = 0;
+		if (data->node != NULL)
+			deps[ndeps++] = { data->node, rpGeneral };
+		vsapi->createVideoFilter(out, "F2Quiver", data->vi, f2quiverGetFrame, f2quiverFree, fmParallelRequests, deps, ndeps, data, core);
+	}
 }
 
 

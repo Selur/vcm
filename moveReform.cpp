@@ -27,7 +27,7 @@
 #include "interpolationMethods.h"
 */
 typedef struct {
-    VSNodeRef *node[2];
+    VSNode *node[2];
     const VSVideoInfo *vi[2];
 	float rect[2][2];
 	int intq;	// 0 near point, 1 bilinear, 2 bicubic, 3 Lanczos interpolation
@@ -51,9 +51,9 @@ typedef struct {
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC reformInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
+static void reformInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
+{
 	ReformData *d = (ReformData *)* instanceData;
-	vsapi->setVideoInfo(d->vi[0], 1, node);
 
 	// 
 
@@ -68,20 +68,20 @@ static void VS_CC reformInit(VSMap *in, VSMap *out, void **instanceData, VSNode 
 	if (d->intq == 3)
 	{
 		d->span = 6;
-		d->lbuf = vs_aligned_malloc <float>((d->pquant + 1) * d->span * sizeof(float), 32);
+		d->lbuf = vsh_aligned_malloc <float>((d->pquant + 1) * d->span * sizeof(float), 32);
 		LanczosCoeff(d->lbuf, d->span, d->pquant);
 	}
 	else if (d->intq == 2)
 	{
 		d->span = 4;
-		d->lbuf = vs_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
+		d->lbuf = vsh_aligned_malloc<float>((d->pquant + 1) * d->span * sizeof(float), 32);
 		CubicIntCoeff(d->lbuf, d->pquant);
 	}
 
 	else if (d->intq == 1)
 	{
 		d->span = 2;
-		d->lbuf = vs_aligned_malloc <float>((d->pquant + 1) * d->span * sizeof(float), 32);
+		d->lbuf = vsh_aligned_malloc <float>((d->pquant + 1) * d->span * sizeof(float), 32);
 		LinearIntCoeff(d->lbuf, d->pquant);
 	}
 	else // d->intq == 0 nearest point
@@ -116,12 +116,11 @@ static void VS_CC reformInit(VSMap *in, VSMap *out, void **instanceData, VSNode 
 	if (UnitSq2Quad(d->sq, d->inv, d->quad) != 0)
 	{
 
-		vsapi->setError(out, " reform: Un invertible Matrix. Check your params");
+		vsapi->mapSetError(out, " reform: Un invertible Matrix. Check your params");
 		vsapi->freeNode(d->node[0]);
 		vsapi->freeNode(d->node[1]);
 		if (d->lbuf != NULL)
 			free(d->lbuf);
-		free(d);
 		return;
 	}
 
@@ -184,9 +183,8 @@ static void VS_CC reformInit(VSMap *in, VSMap *out, void **instanceData, VSNode 
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC reformGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) 
-{
-    ReformData *d = (ReformData *) * instanceData;
+static const VSFrame *VS_CC reformGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    ReformData *d = (ReformData *)instanceData;
 
     if (activationReason == arInitial)
 	{
@@ -197,16 +195,16 @@ static const VSFrameRef *VS_CC reformGetFrame(int n, int activationReason, void 
     } 
 	else if (activationReason == arAllFramesReady)
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node[0], frameCtx);
 		
-        const VSFormat *fi = d->vi[0]->format;
+        const VSVideoFormat *fi = &d->vi[0]->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 
-        const VSFrameRef *bkg = vsapi->getFrameFilter(n, d->node[1], frameCtx);
+        const VSFrame *bkg = vsapi->getFrameFilter(n, d->node[1], frameCtx);
 		
-		VSFrameRef *dst = vsapi->copyFrame(bkg, core);
-		// VSFrameRef *dst = vsapi->newVideoFrame(fi, width, height, src, core);
+		VSFrame *dst = vsapi->copyFrame(bkg, core);
+		// VSFrame *dst = vsapi->newVideoFrame(fi, width, height, src, core);
 		
 		int subW[] = { 0, fi->subSamplingW, fi->subSamplingW, 0 };
 		int subH[] = { 0, fi->subSamplingH, fi->subSamplingH, 0 };
@@ -334,8 +332,8 @@ static const VSFrameRef *VS_CC reformGetFrame(int n, int activationReason, void 
 									}
 									else		// floating pt samples
 									{
-										float min = plane == 0 ? 0.0 : fi->colorFamily == cmRGB ? 0.0 : -0.5f;
-										float max = plane == 0 ? 1.0 : fi->colorFamily == cmRGB ? 1.0 : 0.5f;
+										float min = plane == 0 ? 0.0 : fi->colorFamily == cfRGB ? 0.0 : -0.5f;
+										float max = plane == 0 ? 1.0 : fi->colorFamily == cfRGB ? 1.0 : 0.5f;
 										float * dp = (float *)dstp[plane];
 										const float * sp = (float *)srcp[plane];
 
@@ -426,7 +424,7 @@ static void VS_CC reformFree(void *instanceData, VSCore *core, const VSAPI *vsap
     vsapi->freeNode(d->node[0]);
 	vsapi->freeNode(d->node[1]);
 	if( d->lbuf != NULL)
-		vs_aligned_free (d->lbuf);
+		vsh_aligned_free (d->lbuf);
 	
     free(d);
 }
@@ -442,17 +440,17 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	bool norm = true;	
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node[0] = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node[0] = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi[0] = vsapi->getVideoInfo(d.node[0]);
 
-	d.node[1] = vsapi->propGetNode(in, "bkg", 0, 0);
+	d.node[1] = vsapi->mapGetNode(in, "bkg", 0, 0);
     d.vi[1] = vsapi->getVideoInfo(d.node[1]);
 
     // 
     // vi->format can be 0 if the input clip can change format midstream.
-    if (!isConstantFormat(d.vi[0]) || !isSameFormat(d.vi[0], d.vi[1] ) )
+    if (!isConstantVideoFormat(d.vi[0]) || !isSameVideoInfo(d.vi[0], d.vi[1] ) )
 	{
-        vsapi->setError(out, "reform: only constant format input supported. Both clips must have same format");
+        vsapi->mapSetError(out, "reform: only constant format input supported. Both clips must have same format");
         vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
         return;
@@ -460,7 +458,7 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	int height = d.vi[0]->height;
 	int width = d.vi[0]->width;
     
-    temp = !!vsapi->propGetInt(in, "norm", 0, &err);
+    temp = !!vsapi->mapGetInt(in, "norm", 0, &err);
     if (err)
         norm = true;
 	else
@@ -468,7 +466,7 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     // Let's pretend the only allowed values are 1 or 0...
 		if (temp < 0 || temp > 1)
 		{
-			vsapi->setError(out, "reform:  values allowed for norm are 0 for normalized and 1 for absolute values as coordinates");
+			vsapi->mapSetError(out, "reform:  values allowed for norm are 0 for normalized and 1 for absolute values as coordinates");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
@@ -480,7 +478,7 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 		norm = true;
 
 	bool soft = false;
-	temp = !!vsapi->propGetInt(in, "soft", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "soft", 0, &err);
 	if (!err)
 	{
 		if (temp != 0)
@@ -488,9 +486,9 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	}
 		
 
-	temp = vsapi->propNumElements(in, "rect");
+	temp = vsapi->mapNumElements(in, "rect");
 
-	if (temp == 0)
+	if (temp <= 0)
 	{
 		d.rect[0][0] = 0;
 		d.rect[0][1] = 0;
@@ -510,7 +508,7 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	{
 		if(temp != 4)
 		{
-			vsapi->setError(out, "reform: array rect must have exactly 4 normalized coordinate values corresponding opposite cornrs of rectangle");
+			vsapi->mapSetError(out, "reform: array rect must have exactly 4 normalized coordinate values corresponding opposite cornrs of rectangle");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
@@ -521,8 +519,8 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 			for(int i = 0; i < 2; i ++)
 			{
 				
-				d.rect[i][0] = vsapi->propGetFloat(in, "rect", i + i , 0);
-				d.rect[i][1] = vsapi->propGetFloat(in, "rect", i + i + 1 , 0);
+				d.rect[i][0] = vsapi->mapGetFloat(in, "rect", i + i , 0);
+				d.rect[i][1] = vsapi->mapGetFloat(in, "rect", i + i + 1 , 0);
 
 				if( norm)
 				{					
@@ -536,18 +534,18 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
 	if (d.rect[0][0] == d.rect[1][0] || d.rect[0][1] == d.rect[1][1])
 	{		
-		vsapi->setError(out, " reform: width or height of rect is zero.");
+		vsapi->mapSetError(out, " reform: width or height of rect is zero.");
 		vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
 		return;
 	}
 	
 
-	temp = vsapi->propNumElements(in, "quad");
+	temp = vsapi->mapNumElements(in, "quad");
 
 	if ( temp != 8 )
 	{
-		vsapi->setError(out, "reform: array quad must have exactly 8 entries corresponding to 4 x, y coordinate pairs in a clockwise direction");
+		vsapi->mapSetError(out, "reform: array quad must have exactly 8 entries corresponding to 4 x, y coordinate pairs in a clockwise direction");
 		vsapi->freeNode(d.node[0]);
 		vsapi->freeNode(d.node[1]);
 		return;
@@ -557,8 +555,8 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 		for(int i = 0; i < 4; i ++)
 		{
 			
-			d.quad[i][0] = vsapi->propGetFloat(in, "quad", i + i + 0, 0);
-			d.quad[i][1] = vsapi->propGetFloat(in, "quad", i + i + 1, 0);
+			d.quad[i][0] = vsapi->mapGetFloat(in, "quad", i + i + 0, 0);
+			d.quad[i][1] = vsapi->mapGetFloat(in, "quad", i + i + 1, 0);
 
 			if ( norm)
 			{				
@@ -578,7 +576,7 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 			|| d.quad[i][1] == d.quad[a][1] && d.quad[a][1] == d.quad[b][1])
 
 		{
-			vsapi->setError(out, "reform: three x or y coord are equal and so not a quadrilateral");
+			vsapi->mapSetError(out, "reform: three x or y coord are equal and so not a quadrilateral");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
@@ -592,14 +590,14 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 		if (d.quad[a][0] < d.quad[c][0] && d.quad[b][0] > d.quad[c][0] && d.quad[dd][0] > d.quad[c][0]
 			|| d.quad[a][1] < d.quad[c][1] && d.quad[b][1] > d.quad[c][1] && d.quad[dd][1] > d.quad[c][1])
 		{
-			vsapi->setError(out, "reform: x or y coords are resulting in a concave quad");
+			vsapi->mapSetError(out, "reform: x or y coords are resulting in a concave quad");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 	}
 
-	d.intq = vsapi->propGetInt(in, "intq", 0, &err);
+	d.intq = vsapi->mapGetInt(in, "intq", 0, &err);
 	if(err)
 	{
 		d.intq = 2;	//0 nearpt, 1 bilinear, 2 bicubic, 3 Lanczos 6x6 interpolation
@@ -608,14 +606,14 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 	{
 		if (d.intq < 0 || d.intq > 3)
 		{
-			vsapi->setError(out, "reform: invalid value for intq. 0 nearpt, 1 bilinear, 2 bicubic, 3 Lanczos 6x6 interpolation");
+			vsapi->mapSetError(out, "reform: invalid value for intq. 0 nearpt, 1 bilinear, 2 bicubic, 3 Lanczos 6x6 interpolation");
 			vsapi->freeNode(d.node[0]);
 			vsapi->freeNode(d.node[1]);
 			return;
 		}
 	}
 
-	temp = !!vsapi->propGetInt(in, "q2r", 0, &err);
+	temp = !!vsapi->mapGetInt(in, "q2r", 0, &err);
 	if (err)
 		d.q2r = true;
 	else
@@ -628,7 +626,18 @@ static void VS_CC reformCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     // Creates a new filter and returns a reference to it. Always pass on the in and out
     // arguments or unexpected things may happen. The name should be something that's
     
-    vsapi->createFilter(in, out, "reform", reformInit, reformGetFrame, reformFree, fmParallel, 0, data, core);
+    reformInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[2];
+    int ndeps = 0;
+    for (int i = 0; i < 2; i++)
+    	if (data->node[i] != NULL)
+    		deps[ndeps++] = { data->node[i], rpGeneral };
+    vsapi->createVideoFilter(out, "reform", data->vi[0], reformGetFrame, reformFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

@@ -29,7 +29,7 @@ Author : V.C.Mohan
 
 
 typedef struct {
-	VSNodeRef *node; 
+	VSNode *node; 
 	const VSVideoInfo *vi;
 
 	int type;				// type of Pattern 1.dirac, 2.disc, 3.zcos, 4.sine, 5.step
@@ -50,10 +50,9 @@ typedef struct {
 /***************************************************************/
 
 
-static void VS_CC patternInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi)
+static void patternInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	PatternData *d = (PatternData *)* instanceData;
-	vsapi->setVideoInfo(d->vi, 1, node);
 
 	d->overlay_table = NULL;
 	d->vert = false;
@@ -85,7 +84,7 @@ static void VS_CC patternInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 			d->circ = true;
 		}
 	
-		d->overlay_table = (float *)vs_aligned_malloc<float>(sizeof(float) * d->wl, 32);
+		d->overlay_table = (float *)vsh_aligned_malloc<float>(sizeof(float) * d->wl, 32);
 
 		for (int i = 0; i < d->wl; i++)
 		{
@@ -113,9 +112,8 @@ static void VS_CC patternInit(VSMap *in, VSMap *out, void **instanceData, VSNode
 // upstream filters.
 // Once all frames are ready, the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
-{
-	PatternData *d = (PatternData *)* instanceData;
+static const VSFrame *VS_CC patternGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+	PatternData *d = (PatternData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -124,14 +122,14 @@ static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
 		// The reason we query this on a per frame basis is because we want our filter
 		// to accept clips with varying dimensions. If we reject such content using d->vi
 		// would be better.
-		const VSFormat *fi = d->vi->format;
+		const VSVideoFormat *fi = &d->vi->format;
 		int height = vsapi->getFrameHeight(src, 0);
 		int width = vsapi->getFrameWidth(src, 0);
-		VSFrameRef *dst = vsapi->copyFrame(src, core);
+		VSFrame *dst = vsapi->copyFrame(src, core);
 		int nplanes = fi->numPlanes;
 		int nbytes = fi->bytesPerSample;
 		int nbits = fi->bitsPerSample;
@@ -167,7 +165,7 @@ static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void
 
 				else if (nbytes == 4)
 				{
-					if (p == 0 || fi->colorFamily == cmRGB)
+					if (p == 0 || fi->colorFamily == cfRGB)
 
 						*((float*)(dp[p]) + (d->y >> subH[p]) * pitch[p] + (d->x >> subW[p])) = d->color[p] / 256.0f;
 					else
@@ -187,7 +185,7 @@ static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void
 			{
 				col2[0] = (1.0f - d->spike) * d->color[0];
 
-				if (fi->colorFamily == cmRGB)
+				if (fi->colorFamily == cfRGB)
 				{
 					col2[1] = (1.0f - d->spike) * d->color[1];
 					col2[2] = (1.0f - d->spike) * d->color[2];
@@ -236,7 +234,7 @@ static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void
 
 							else if (nbytes == 4)
 							{
-								if (p == 0 || fi->colorFamily == cmRGB)
+								if (p == 0 || fi->colorFamily == cfRGB)
 
 									*((float*)(dp[p]) + (h >> subH[p]) * pitch[p]
 									+ (w >> subW[p])) = col2[p] / 256.0f;
@@ -314,7 +312,7 @@ static const VSFrameRef *VS_CC patternGetFrame(int n, int activationReason, void
 
 					for (int p = 0; p < nplanes; p++)
 					{
-						if (fi->colorFamily == cmYUV && p > 0)  continue;
+						if (fi->colorFamily == cfYUV && p > 0)  continue;
 
 						if (nbytes == 1)
 						{
@@ -354,7 +352,7 @@ static void VS_CC patternFree(void *instanceData, VSCore *core, const VSAPI *vsa
 	PatternData *d = (PatternData *)instanceData;
 	vsapi->freeNode(d->node);
 	if (d->overlay_table != NULL)
-		vs_aligned_free(d->overlay_table);
+		vsh_aligned_free(d->overlay_table);
 	free(d);
 }
 
@@ -367,46 +365,46 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	int temp;
 
 	// Get a clip reference from the input arguments. This must be freed later.
-	d.node = vsapi->propGetNode(in, "clip", 0, 0);
+	d.node = vsapi->mapGetNode(in, "clip", 0, 0);
 	d.vi = vsapi->getVideoInfo(d.node);
 
 	// In this integer and float. Note that
 	// vi->format can be 0 if the input clip can change format midstream.
-	if (!isConstantFormat(d.vi) )
+	if (!isConstantVideoFormat(d.vi) )
 	{
-		vsapi->setError(out, "Pattern: format of clip must be constant ");
+		vsapi->mapSetError(out, "Pattern: format of clip must be constant ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->colorFamily != cmRGB && d.vi->format->colorFamily != cmYUV && d.vi->format->colorFamily != cmGray)
+	if (d.vi->format.colorFamily != cfRGB && d.vi->format.colorFamily != cfYUV && d.vi->format.colorFamily != cfGray)
 	{
-		vsapi->setError(out, "Pattern: RGB, YUV and Gray color formats only for input allowed ");
+		vsapi->mapSetError(out, "Pattern: RGB, YUV and Gray color formats only for input allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	if (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample == 16)
+	if (d.vi->format.sampleType == stFloat && d.vi->format.bitsPerSample == 16)
 	{
-		vsapi->setError(out, "Pattern: Half float formats not allowed ");
+		vsapi->mapSetError(out, "Pattern: Half float formats not allowed ");
 		vsapi->freeNode(d.node);
 		return;
 	}
 
-	d.type = vsapi->propGetInt(in, "type", 0, &err);
+	d.type = vsapi->mapGetInt(in, "type", 0, &err);
 
 	if (err)
 		d.type = 4;
 
 	else if ( d.type < 1 || d.type > 5)
 	{
-		vsapi->setError(out, "Pattern: type can be 1 to 5 only. 1.dirac, 2 disc, 3.zcos, 4.sine or 5.step only ");
+		vsapi->mapSetError(out, "Pattern: type can be 1 to 5 only. 1.dirac, 2 disc, 3.zcos, 4.sine or 5.step only ");
 		vsapi->freeNode(d.node);
 		return;
 	}
-	d.x = vsapi->propGetInt(in, "x", 0, &err);
+	d.x = vsapi->mapGetInt(in, "x", 0, &err);
 	if (err)
 		d.x = d.vi->width / 2;
 
-	d.y = vsapi->propGetInt(in, "y", 0, &err);
+	d.y = vsapi->mapGetInt(in, "y", 0, &err);
 	if (err)
 		d.y = d.vi->height / 2;
 
@@ -414,7 +412,7 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	{
 		if (d.x < 0 || d.x >= d.vi->width || d.y < 0 || d.y >= d.vi->height)
 		{
-			vsapi->setError(out, "Pattern: for the type opted x and y must be within frame; ");
+			vsapi->mapSetError(out, "Pattern: for the type opted x and y must be within frame; ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -422,7 +420,7 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 
 		for (int i = 0; i < 3; i++)
 		{
-			temp = vsapi->propGetInt(in, "bgr", i, &err);
+			temp = vsapi->mapGetInt(in, "bgr", i, &err);
 			if (err)
 			{
 				if (i == 0)
@@ -433,7 +431,7 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 
 			else if (temp < 0 || temp > 255)
 			{
-				vsapi->setError(out, "Pattern: bgr values must be between 0 and 255; ");
+				vsapi->mapSetError(out, "Pattern: bgr values must be between 0 and 255; ");
 				vsapi->freeNode(d.node);
 				return;
 			}
@@ -445,7 +443,7 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 
 		for (int i = 0; i < 3; i++)
 		{
-			if (d.vi->format->colorFamily == cmYUV)
+			if (d.vi->format.colorFamily == cfYUV)
 
 				d.color[i] = yuv[i];
 			else
@@ -455,19 +453,19 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 
 		if (d.type == 2)
 		{
-			temp = vsapi->propGetInt(in, "rad", 0, &err);
+			temp = vsapi->mapGetInt(in, "rad", 0, &err);
 
 			if (err)
 				temp = 80;
 			if (temp < 4 || temp  > d.vi->width || temp > d.vi->height)
 			{
-				vsapi->setError(out, "Pattern: value of rad must be positive and with x, y values should ensure the circle do not go out of frame");
+				vsapi->mapSetError(out, "Pattern: value of rad must be positive and with x, y values should ensure the circle do not go out of frame");
 				vsapi->freeNode(d.node);
 				return;
 			}
 			d.rad = temp;
 
-			temp = !!vsapi->propGetInt(in, "spk", 0, &err);
+			temp = !!vsapi->mapGetInt(in, "spk", 0, &err);
 			if (err)
 				d.spk = false;
 			else
@@ -475,12 +473,12 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 
 			if (d.spk)
 			{
-				d.spike = vsapi->propGetFloat(in, "spike", 0, &err);
+				d.spike = vsapi->mapGetFloat(in, "spike", 0, &err);
 				if (err)
 					d.spike = 0.1f;
 				else if (d.spike <= 0.01f || d.spike > 0.99f)
 				{
-					vsapi->setError(out, "Pattern: spike must be between 0.01 and 0.99 ");
+					vsapi->mapSetError(out, "Pattern: spike must be between 0.01 and 0.99 ");
 					vsapi->freeNode(d.node);
 					return;
 				}
@@ -491,42 +489,41 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	else if (d.type > 2)
 	{
 		//3.zcos, 4.sine, 5.step
-		d.orient = vsapi->propGetInt(in, "orient", 0, &err);
+		d.orient = vsapi->mapGetInt(in, "orient", 0, &err);
 		if (err)
 			d.orient = 1;
 		else if (d.orient < 1 || d.orient > 4)
 		{
-			vsapi->setError(out, "Pattern: orient can be 1 to 4 for 1 circ, 2 vert, 3 hor, 4 slant ");
+			vsapi->mapSetError(out, "Pattern: orient can be 1 to 4 for 1 circ, 2 vert, 3 hor, 4 slant ");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		temp = !!vsapi->propGetInt(in, "stat", 0, &err);
+		temp = !!vsapi->mapGetInt(in, "stat", 0, &err);
 		if (err)
 			d.stat = true;
 		else
 			d.stat = temp == 0 ? false : true;
 
-		temp = vsapi->propGetInt(in, "wl", 0, &err);
+		temp = vsapi->mapGetInt(in, "wl", 0, &err);
 
 		if (err)
 			temp = 16;
 		else if (temp < 4 || temp > d.vi->height / 2 || temp > d.vi->width / 2)
 		{
-			vsapi->setError(out, "Pattern: wavelength wl should be between 4 and half of smaller dimension of frame ");
+			vsapi->mapSetError(out, "Pattern: wavelength wl should be between 4 and half of smaller dimension of frame ");
 			vsapi->freeNode(d.node);
 			return;
 		}
-		else
-			d.wl = temp;
+		d.wl = temp;
 
-		d.overlay = vsapi->propGetFloat(in, "overlay", 0, &err);
+		d.overlay = vsapi->mapGetFloat(in, "overlay", 0, &err);
 
 		if (err)
 			d.overlay = 0.1f;
 		else if (d.overlay < 0.004 || d.overlay > 1.0)
 		{
-			vsapi->setError(out, "Pattern: overlay should be between 0.004 and 1.0 ");
+			vsapi->mapSetError(out, "Pattern: overlay should be between 0.004 and 1.0 ");
 			vsapi->freeNode(d.node);
 			return;
 		}
@@ -535,7 +532,7 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	else
 	{
 		// shoud not vome here
-		vsapi->setError(out, "Pattern:unexpected error");
+		vsapi->mapSetError(out, "Pattern:unexpected error");
 		vsapi->freeNode(d.node);
 		return;
 	}
@@ -555,12 +552,22 @@ static void VS_CC patternCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	// need to modify no shared data at all when the filter is running.
 	// For more complicated filters, fmParallelRequests is usually easier to achieve as it can
 	// be prefetched in parallel but the actual processing is serialized.
-	// The others can be considered special cases where fmSerial is useful to source filters and
+	// The others can be considered special cases where fmFrameState is useful to source filters and
 	// fmUnordered is useful when a filter's state may change even when deciding which frames to
 	// prefetch (such as a cache filter).
 	// If your filter is really fast (such as a filter that only resorts frames) you should set the
 	// nfNoCache flag to make the caching work smoother.
-	vsapi->createFilter(in, out, "Pattern", patternInit, patternGetFrame, patternFree, fmParallel, 0, data, core);
+	patternInit(in, out, (void **)&data, core, vsapi);
+	if (vsapi->mapGetError(out))
+	{
+		free(data);
+		return;
+	}
+	VSFilterDependency deps[1];
+	int ndeps = 0;
+	if (data->node != NULL)
+		deps[ndeps++] = { data->node, rpGeneral };
+	vsapi->createVideoFilter(out, "Pattern", data->vi, patternGetFrame, patternFree, fmParallel, deps, ndeps, data, core);
 }
 
 //////////////////////////////////////////

@@ -46,10 +46,9 @@ Copyright (C) <2021>  <V.C.Mohan>
  --------------------------------------------------*/
  //Here is the acutal constructor code used
 
-static void VS_CC fisheyepartInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi)
+static void fisheyepartInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
 	FisheyeData* d = (FisheyeData*)*instanceData;	
-	vsapi->setVideoInfo(d->ivi, 1, node);
 	double focal = getFocalLength(d->frad, d->method, d->fov);
 
 	d->oRadius = getOutputRadius(d->frad, focal, d->rix);
@@ -59,13 +58,13 @@ static void VS_CC fisheyepartInit(VSMap* in, VSMap* out, void** instanceData, VS
 	int frsq = d->frad * d->frad;
 	// output
 	
-	const VSFormat* fi = d->ivi->format;
+	const VSVideoFormat* fi = &d->ivi->format;
 	int nbytes = fi->bytesPerSample;
 	int nbits = fi->bitsPerSample;
 	d->quantile = 64;
 	d->nEntries = d->test ? 2 :d->q == 1? 3: 4;	
 		
-	d->xyAndQ = (int*)vs_aligned_malloc<int>(sizeof(int) * swidth * sheight * d->nEntries, 32);
+	d->xyAndQ = (int*)vsh_aligned_malloc<int>(sizeof(int) * swidth * sheight * d->nEntries, 32);
 	d->rNorm = 1.0; // value not used in this part
 	int* xyQ = d->xyAndQ;
 	float xy[2];
@@ -147,10 +146,9 @@ static void VS_CC fisheyepartInit(VSMap* in, VSMap* out, void** instanceData, VS
 }
 
 //...............................................................
-static const VSFrameRef* VS_CC fisheyepartGetFrame(int n, int activationReason, void** instanceData,
-	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi)
-{
-	FisheyeData* d = (FisheyeData*)*instanceData;
+static const VSFrame* VS_CC fisheyepartGetFrame(int n, int activationReason, void* instanceData,
+	void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+	FisheyeData* d = (FisheyeData *)instanceData;
 
 	if (activationReason == arInitial)
 	{
@@ -158,9 +156,9 @@ static const VSFrameRef* VS_CC fisheyepartGetFrame(int n, int activationReason, 
 	}
 	else if (activationReason == arAllFramesReady)
 	{
-		const VSFrameRef* src = vsapi->getFrameFilter(n, d->node, frameCtx);
-		VSFrameRef* dst;
-		const VSFormat* fi = d->ivi->format;
+		const VSFrame* src = vsapi->getFrameFilter(n, d->node, frameCtx);
+		VSFrame* dst;
+		const VSVideoFormat* fi = &d->ivi->format;
 		int sheight = vsapi->getFrameHeight(src, 0);
 		int swidth = vsapi->getFrameWidth(src, 0);
 		int nbits = fi->bitsPerSample;
@@ -193,7 +191,7 @@ static const VSFrameRef* VS_CC fisheyepartGetFrame(int n, int activationReason, 
 
 			if (d->test)
 			{				
-				if (fi->colorFamily == cmRGB)
+				if (fi->colorFamily == cfRGB)
 				{
 					if (nbytes == 1)
 						dimplaneRGB(dp, sp, spitch, swidth, sheight, d->dim);
@@ -203,7 +201,7 @@ static const VSFrameRef* VS_CC fisheyepartGetFrame(int n, int activationReason, 
 						dimplaneRGB((float*)dp, (float*)sp, spitch, swidth, sheight, d->dim);
 				}
 
-				else if ( p == 0 && fi->colorFamily == cmYUV)
+				else if ( p == 0 && fi->colorFamily == cfYUV)
 				{
 					if (nbytes == 1)
 					{
@@ -250,11 +248,11 @@ static const VSFrameRef* VS_CC fisheyepartGetFrame(int n, int activationReason, 
 			{	
 				
 				uint8_t min8 = 0, max8 = (uint8_t)255;
-				uint16_t min16 = (uint16_t)(fi->colorFamily == cmYUV ? 16 << (nbits - 8) : 0);
-				uint16_t max16 = (uint16_t)((fi->colorFamily == cmYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
+				uint16_t min16 = (uint16_t)(fi->colorFamily == cfYUV ? 16 << (nbits - 8) : 0);
+				uint16_t max16 = (uint16_t)((fi->colorFamily == cfYUV ? 235 : 255 << (nbits - 8)) << (nbits - 8));
 				float minf = 0, maxf = 1.0f;
 
-				if (p > 0 && fi->colorFamily == cmYUV)
+				if (p > 0 && fi->colorFamily == cfYUV)
 				{
 					minf = -0.5f;
 					maxf = 0.5f;
@@ -372,9 +370,9 @@ static void VS_CC fisheyepartFree(void* instanceData, VSCore* core, const VSAPI*
 	FisheyeData* d = (FisheyeData*)instanceData;
 	vsapi->freeNode(d->node);
 	
-		vs_aligned_free(d->xyAndQ);
+		vsh_aligned_free(d->xyAndQ);
 		if (!d->iCoeff == NULL)
-			vs_aligned_free(d->iCoeff);
+			vsh_aligned_free(d->iCoeff);
 	
 	free(d);
 }

@@ -1,9 +1,9 @@
 #ifndef CONVERT_BGR_FOR_INPUT_FORMAT_V_C_MOHAN
 #define CONVERT_BGR_FOR_INPUT_FORMAT_V_C_MOHAN
 // input 8 bit bgr array. color array must be 12 bytes
-void convertBGRforInputFormat(uint8_t* color, const uint8_t* bgr, const VSFormat* fi);
+void convertBGRforInputFormat(uint8_t* color, const uint8_t* bgr, const VSVideoFormat* fi);
 
-void convertBGRforInputFormat(uint8_t* color, const uint8_t* bgr, const VSFormat* fi)
+void convertBGRforInputFormat(uint8_t* color, const uint8_t* bgr, const VSVideoFormat* fi)
 {
 
 	uint8_t yuv[3];
@@ -17,21 +17,21 @@ void convertBGRforInputFormat(uint8_t* color, const uint8_t* bgr, const VSFormat
 	{
 		if (nbytes == 1)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				color[k] = bgr[k];
 			else
 				color[k] = yuv[k];
 		}
 		else if (nbytes == 2)
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				*((uint16_t*)color + k) = (uint16_t)(bgr[k] << (nbits - 8));
 			else
 				*((uint16_t*)color + k) = (uint16_t)(yuv[k] << (nbits - 8));
 		}
 		else // float
 		{
-			if (fi->colorFamily == cmRGB)
+			if (fi->colorFamily == cfRGB)
 				*((float*)color + k) = (float)(bgr[k] / 255.0f);
 			else
 			{

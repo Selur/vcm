@@ -22,7 +22,7 @@ veed filter plugin for vapoursynth by V.C.Mohan
 	For details of how to contact author see <http://www.avisynth.org/vcmohan> 
 *************************************************************************************************/  
 typedef struct {
-				VSNodeRef *node;
+				VSNode *node;
 				const VSVideoInfo *vi;
 				int str;				//strength of filter. 1 to 8
 				int rad;				// pixels in radius of circle that influence
@@ -137,16 +137,13 @@ void VeedOut(finc * dp, const int dpitch,
 // This function is called immediately after vsapi->createFilter(). This is the only place where the video
 // properties may be set. In this case we simply use the same as the input clip. You may pass an array
 // of VSVideoInfo if the filter has more than one output, like rgb+alpha as two separate clips.
-static void VS_CC veedInit
-				(VSMap *in, VSMap *out, void **instanceData, 
-				VSNode *node, VSCore *core, const VSAPI *vsapi) 
+static void veedInit(const VSMap *in, VSMap *out, void **instanceData, VSCore *core, const VSAPI *vsapi)
 {
     VeedData *d = (VeedData *) * instanceData;
-    vsapi->setVideoInfo(d->vi, 1, node);	
 
 	d->ksize = 2 * d->rad + 1;	
 
-	d->kern =  vs_aligned_malloc<float>(sizeof(float)*d->ksize, 32);	
+	d->kern =  vsh_aligned_malloc<float>(sizeof(float)*d->ksize, 32);	
 		
 	for(int i = 0; i < d->ksize; i ++)
 	{
@@ -166,12 +163,11 @@ static void VS_CC veedInit
 // upstream filters.
 // Once all frames are ready the the filter will be called with arAllFramesReady. It is now time to
 // do the actual processing.
-static const VSFrameRef *VS_CC veedGetFrame
-				(int n, int activationReason, void **instanceData, 
+static const VSFrame *VS_CC veedGetFrame
+				(int n, int activationReason, void *instanceData, 
 				void **frameData, VSFrameContext *frameCtx, 
-				VSCore *core, const VSAPI *vsapi)
-{
-    VeedData *d = (VeedData *) * instanceData;
+				VSCore *core, const VSAPI *vsapi) {
+    VeedData *d = (VeedData *)instanceData;
 
     if (activationReason == arInitial) 
 	{
@@ -180,11 +176,11 @@ static const VSFrameRef *VS_CC veedGetFrame
     }
 	else if (activationReason == arAllFramesReady) 
 	{
-        const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *src = vsapi->getFrameFilter(n, d->node, frameCtx);
         // The reason we query this on a per frame basis is because we want our filter
         // to accept clips with varying dimensions. If we reject such content using d->vi
         // would be better.
-        const VSFormat *fi = d->vi->format;
+        const VSVideoFormat *fi = &d->vi->format;
         int height = vsapi->getFrameHeight(src, 0);
         int width = vsapi->getFrameWidth(src, 0);
 	 
@@ -192,8 +188,8 @@ static const VSFrameRef *VS_CC veedGetFrame
         // When creating a new frame for output it is VERY EXTREMELY SUPER IMPORTANT to
         // supply the "dominant" source frame to copy properties from. Frame props
         // are an essential part of the filter chain and you should NEVER break it.
-        VSFrameRef * dst = vsapi->copyFrame(src, core);
-		VSFrameRef *work = vsapi->newVideoFrame(fi, width, height, src, core);
+        VSFrame * dst = vsapi->copyFrame(src, core);
+		VSFrame *work = vsapi->newVideoFrame(fi, width, height, src, core);
 
         // It's processing loop time!
         // Loop over all the planes
@@ -217,7 +213,7 @@ static const VSFrameRef *VS_CC veedGetFrame
 			
 			if (d->planes[plane] == 0)
 				continue;
-			vs_bitblt(workp, work_stride, srcp, src_stride, bwd * samplesize, bht);
+			bitblt(workp, work_stride, srcp, src_stride, bwd * samplesize, bht);
 
 			if (fi->sampleType == stInteger)
 			{
@@ -275,7 +271,7 @@ static void VS_CC veedFree(void *instanceData, VSCore *core, const VSAPI *vsapi)
    VeedData *d = (VeedData *)instanceData;
     vsapi->freeNode(d->node); 
 	
-	vs_aligned_free (d->kern);
+	vsh_aligned_free (d->kern);
 	free(d);
 }
 
@@ -290,16 +286,11 @@ static void VS_CC veedCreate(const VSMap *in,
     int err;
 
     // Get a clip reference from the input arguments. This must be freed later.
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
 
     // Note that
     // vi->format can be 0 if the input clip can change format midstream.
-	if (d.vi->format->colorFamily == cmCompat) {
-		vsapi->setError(out, "veed: Compat format not accepted.");
-		vsapi->freeNode(d.node);
-		return;
-	}
 	
 
     // If a property read fails for some reason (index out of bounds/wrong type)
@@ -309,7 +300,7 @@ static void VS_CC veedCreate(const VSMap *in,
     // this could fail is when the value wasn't set by the user.
     // And when it's not set we want it to default to enabled.
     
-	d.rad = vsapi->propGetInt(in, "rad", 0, &err);
+	d.rad = vsapi->mapGetInt(in, "rad", 0, &err);
 
     if (err)
         d.rad = 5;
@@ -317,11 +308,11 @@ static void VS_CC veedCreate(const VSMap *in,
     // the only allowed 
     if (d.rad < 1 || d.rad > 8 ) 
 	{
-		vsapi->setError(out,"veed: rad value can be 1 to 8 only");
+		vsapi->mapSetError(out,"veed: rad value can be 1 to 8 only");
 		vsapi->freeNode(d.node);
 		return;
     }
-	d.str = vsapi->propGetInt(in, "str", 0, &err);
+	d.str = vsapi->mapGetInt(in, "str", 0, &err);
 
     if (err)
         d.str = 5;
@@ -329,21 +320,21 @@ static void VS_CC veedCreate(const VSMap *in,
     // the only allowed 
     if (d.str < 1 || d.str > 8 ) 
 	{
-		vsapi->setError(out,"veed: str value can be 1 to 8 only");
+		vsapi->mapSetError(out,"veed: str value can be 1 to 8 only");
 		vsapi->freeNode(d.node);
 		return;
     }
 
 	if ( pow(2.71828, -(0.5 * (d.rad * d.rad) / (d.str*d.str)) / (d.str * sqrt(6.2831853))) < 2.0 / 255)
 	{
-		vsapi->setError(out,"veed: Either decrease rad or increase str to prevent wasteful processing.");
+		vsapi->mapSetError(out,"veed: Either decrease rad or increase str to prevent wasteful processing.");
 		vsapi->freeNode(d.node);
 		return;
     }
 
 	for ( int i = 0; i < 3; i ++)
 	{
-		d.planes[i] = !!vsapi->propGetInt(in, "planes", i, &err);
+		d.planes[i] = !!vsapi->mapGetInt(in, "planes", i, &err);
 
 		if (err)
 		 d.planes[i] = 1;
@@ -351,12 +342,12 @@ static void VS_CC veedCreate(const VSMap *in,
 			// the only allowed 
 		if (d.planes[i] < 0 || d.planes[i] > 1 ) 
 		{
-			vsapi->setError(out,"veed: planes value can be 0 or 1 only");
+			vsapi->mapSetError(out,"veed: planes value can be 0 or 1 only");
 			vsapi->freeNode(d.node);
 			return;
 		}
 
-		d.plimit[i] = vsapi->propGetInt(in, "plimit", i, &err);
+		d.plimit[i] = vsapi->mapGetInt(in, "plimit", i, &err);
 
 		if (err)
 		 d.plimit[i] = 3;
@@ -364,11 +355,11 @@ static void VS_CC veedCreate(const VSMap *in,
 			// the only allowed 
 		if (d.plimit[i] < 0 || d.plimit[i] > 10 ) 
 		{
-			vsapi->setError(out,"veed: plimit values can be 0 to 10 only");
+			vsapi->mapSetError(out,"veed: plimit values can be 0 to 10 only");
 			vsapi->freeNode(d.node);
 			return;
 		}
-		d.mlimit[i] = vsapi->propGetInt(in, "mlimit", i, &err);
+		d.mlimit[i] = vsapi->mapGetInt(in, "mlimit", i, &err);
 
 		if (err)
 		 d.mlimit[i] = 3;
@@ -376,15 +367,15 @@ static void VS_CC veedCreate(const VSMap *in,
 			// the only allowed 
 		if (d.mlimit[i] < 0 || d.mlimit[i] > 10 ) 
 		{
-			vsapi->setError(out,"veed: mlimit values can be 0 to 10 only");
+			vsapi->mapSetError(out,"veed: mlimit values can be 0 to 10 only");
 			vsapi->freeNode(d.node);
 			return;
 		}
 	}
 
-	if(d.planes[0] == 0 && d.planes[1] == 0 && d.planes[2] == 0 || (d.vi->format->colorFamily == cmGray && d.planes[0] == 0))
+	if(d.planes[0] == 0 && d.planes[1] == 0 && d.planes[2] == 0 || (d.vi->format.colorFamily == cfGray && d.planes[0] == 0))
 	{
-			vsapi->setError(out,"veed: values of all planes are zero. At least one should be set to 1");
+			vsapi->mapSetError(out,"veed: values of all planes are zero. At least one should be set to 1");
 			vsapi->freeNode(d.node);
 			return;
 	}
@@ -401,14 +392,22 @@ static void VS_CC veedCreate(const VSMap *in,
     // need to modify no shared data at all when the filter is running.
     // For more complicated filters fmParallelRequests is usually easier to achieve as an
     // be prefetched in parallel but the actual processing is serialized.
-    // The others can be considered special cases where fmSerial is useful to source filters and
+    // The others can be considered special cases where fmFrameState is useful to source filters and
     // fmUnordered is useful when a filter's state may change even when deciding which frames to
     // prefetch (such as a cache filter).
     // If you filter is really fast (such as a filter that only resorts frames) you should set the
     // nfNoCache flag to make the caching work smoother.
-    vsapi->createFilter(in, out, "veed", veedInit, 
-								veedGetFrame, veedFree, 
-								fmParallel, 0, data, core);
+    veedInit(in, out, (void **)&data, core, vsapi);
+    if (vsapi->mapGetError(out))
+    {
+    	free(data);
+    	return;
+    }
+    VSFilterDependency deps[1];
+    int ndeps = 0;
+    if (data->node != NULL)
+    	deps[ndeps++] = { data->node, rpGeneral };
+    vsapi->createVideoFilter(out, "veed", data->vi, veedGetFrame, veedFree, fmParallel, deps, ndeps, data, core);
     return;
 }
 
