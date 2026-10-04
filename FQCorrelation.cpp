@@ -441,8 +441,11 @@ static const VSFrame *VS_CC f2qcorrGetFrame(int n, int activationReason, void *i
 			
 		}
 
-		if (n >= d->ef && d->ofile != NULL)
+		if (d->txt && n >= d->ef && d->ofile != NULL)
+		{
 			fclose(d->ofile);
+			d->ofile = NULL;
+		}
 
 
 		return dst;
@@ -514,6 +517,15 @@ static void VS_CC f2qcorrCreate(const VSMap *in, VSMap *out, void *userData, VSC
 	// strict checking because of what we wrote in the argument string, the only
 	// reason this could fail is when the value wasn't set by the user.
 	// And when it's not set we want it to default to enabled.
+	// the text output members are only filled in when txt is set, but getFrame and free look at them
+	d.ofile = NULL;
+	d.filename = NULL;
+	d.cx = 0;
+	d.cy = 0;
+	d.sf = 0;
+	d.ef = -1;
+	d.every = 1;
+
 	temp = !!int64ToIntS(vsapi->mapGetInt(in, "txt", 0, &err));
 	if (err || temp == 0)
 		d.txt = false;
