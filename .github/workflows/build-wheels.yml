@@ -19,7 +19,7 @@ jobs:
           - { name: Linux x86_64, os: ubuntu-latest, archs: x86_64 }
           - { name: macOS arm64, os: macos-14, archs: arm64 }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # fftw3f is linked statically on every platform so the plugin has no run time dependencies.
       - name: Install fftw3 (vcpkg, static CRT)
@@ -37,7 +37,7 @@ jobs:
         run: bash ci/build-fftw.sh ${{ github.workspace }}/fftw-prefix
 
       - name: Build wheel
-        uses: pypa/cibuildwheel@v3.4
+        uses: pypa/cibuildwheel@v4.3
         env:
           # The plugin only uses the VapourSynth C API, so one interpreter is enough;
           # the wheel is re-tagged to py3-none below.
@@ -47,6 +47,9 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           MACOSX_DEPLOYMENT_TARGET: '11.0'
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: ''
+          # cibuildwheel 4 runs delvewheel on Windows by default; the plugin links the MSVC
+          # runtime statically (b_vscrt=mt) and has no other DLL dependencies, so skip it.
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ''
           # Linux: fftw is built inside the manylinux container.
           CIBW_BEFORE_ALL_LINUX: bash {project}/ci/build-fftw.sh /usr/local
           CIBW_CONFIG_SETTINGS_LINUX: setup-args=-Dprefer_static=true setup-args=-Dfftw3_dir=/usr/local
@@ -75,12 +78,12 @@ jobs:
           cp -r docs plugin/
           ls -l plugin
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}
           path: wheelhouse/*.whl
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: plugin-${{ matrix.os }}
           path: plugin/
@@ -93,12 +96,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: plugin-*
           path: plugins

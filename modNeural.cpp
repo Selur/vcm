@@ -481,10 +481,9 @@ static void neuralInit(const VSMap *in, VSMap *out, void **instanceData, VSCore 
 	//	 int * off = (int*)vsh_aligned_malloc((size_t)(d->inodes * sizeof(int)), (size_t)32);
 	//	 float * input = (float*)vsh_aligned_malloc((size_t)(d->inodes * sizeof(float)), (size_t)64);
 
-		 // get memory from vs and not from system
-		 VSFrame *buf = vsapi->newVideoFrame(fi, d->inodes * (sizeof(int) + sizeof(float)), 1, src, core);
-		 uint8_t *bp = vsapi->getWritePtr(buf, 0);
-		 float * input = (float *)bp;
+		 // work buffer for the input values and offsets of one neuron. A video frame was used
+		 // before, but a 1 pixel high frame is not valid for subsampled formats (VapourSynth R81 rejects it).
+		 float * input = vsh_aligned_malloc<float>(d->inodes * (sizeof(int) + sizeof(float)), 32);
 
 		 int * offs = (int*)(input + d->inodes );
 
@@ -568,7 +567,7 @@ static void neuralInit(const VSMap *in, VSMap *out, void **instanceData, VSCore 
 			 }
 		 }
 		 
-		 vsapi->freeFrame(buf);
+		 vsh_aligned_free(input);
 		 vsapi->freeFrame(src);
 
 		 return dst;
