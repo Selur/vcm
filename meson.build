@@ -1,7 +1,7 @@
 project('vcm', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++14'],
   meson_version : '>=0.63.0',
-  version : '1.0.1'
+  version : '1.0.2'
 )
 
 cpp = meson.get_compiler('cpp')
